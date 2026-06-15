@@ -28,8 +28,8 @@ echo "Kernel: $(uname -r)"
 section "OS"
 grep -E "PRETTY_NAME|VERSION_ID|VERSION=" /etc/os-release || true
 
-section "User vpsguard"
-id vpsguard || warn "User vpsguard does not exist."
+section "User alex"
+id alex || warn "User alex does not exist."
 
 section "Sudo group"
 getent group sudo || true

@@ -3,10 +3,10 @@ set -euo pipefail
 
 # VPSGuard
 # One-click Ubuntu LTS VPS initialization and SSH security hardening tool.
-# Default user: vpsguard
+# Default user: alex
 # Supported OS: Ubuntu LTS only
 
-NEW_USER="${NEW_USER:-vpsguard}"
+NEW_USER="${NEW_USER:-alex}"
 SSH_PORT="${SSH_PORT:-}"
 SSHD_CONFIG="/etc/ssh/sshd_config"
 FAIL2BAN_JAIL="/etc/fail2ban/jail.d/sshd.local"

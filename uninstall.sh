@@ -27,7 +27,7 @@ fi
 echo
 warn "This will disable UFW and fail2ban."
 warn "It will NOT automatically re-enable root login or SSH password login."
-warn "It will NOT delete the vpsguard user."
+warn "It will NOT delete the alex user."
 echo
 echo -e "${RED}${BOLD}Use this only when you understand the impact.${NC}"
 echo
@@ -66,7 +66,7 @@ fi
 info "Uninstall completed."
 echo
 echo "SSH configuration was not changed."
-echo "User vpsguard was not deleted."
+echo "User alex was not deleted."
 echo
 echo "To manually edit SSH config:"
 echo "  nano /etc/ssh/sshd_config"
