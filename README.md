@@ -2,23 +2,22 @@
 
 VPSGuard is a one-click Ubuntu LTS VPS initialization and SSH security hardening tool.
 
-It is designed for a new VPS after the first root login.
+It is designed for a brand-new VPS after the first root login.
 
 ## What VPSGuard Does
 
-- Check Ubuntu LTS system
-- Update system packages
-- Install basic tools
-- Create a new sudo user: `alex`
-- Copy root SSH public keys to the new user
-- Test sudo permission
-- Install and configure UFW firewall
-- Allow only the current SSH port by default
-- Install and configure fail2ban
-- Disable root SSH login
-- Disable SSH password login
-- Keep SSH key login enabled
-- Print final configuration with colored output
+- Checks Ubuntu LTS system compatibility
+- Updates system packages
+- Installs basic server tools
+- Creates a new sudo user: `vpsguard`
+- Copies root SSH public keys to the new sudo user
+- Tests sudo permission
+- Installs and configures UFW firewall
+- Allows only the current SSH port by default
+- Installs and configures fail2ban
+- Disables root SSH login
+- Disables SSH password login
+- Keeps SSH key login enabled
 
 ## Supported System
 
@@ -29,85 +28,207 @@ Recommended:
 - Ubuntu 22.04 LTS
 - Ubuntu 24.04 LTS
 
-## Important Before Running
+---
 
-Before running VPSGuard, make sure `/root/.ssh/authorized_keys` exists and contains your SSH public key.
+# SSH Key Preparation Before Running VPSGuard
 
-Check:
+> Important: VPSGuard expects the root account to already have at least one SSH public key in `/root/.ssh/authorized_keys` before the script runs.
 
-```bash
-ls -la /root/.ssh
-cat /root/.ssh/authorized_keys
-```
+Before running VPSGuard on a brand-new VPS, make sure SSH key login is ready.
 
-If `authorized_keys` is empty, add your SSH public key first.
+Key rules:
 
-## 安装前准备：确认 SSH 公钥和私钥
+- The Private Key / private key stays on your local computer, phone, or Termius.
+- The Public Key / public key is copied to the VPS.
+- Never paste or upload your Private Key / private key to the VPS.
+- VPSGuard requires `/root/.ssh/authorized_keys` to already exist and contain at least one SSH public key.
+- VPSGuard copies root's existing SSH public key to the new sudo user created by the script.
+- After installation, log in as the new user with the same private key.
 
-在本地电脑查看是否已有 SSH 公钥：
+## macOS / Linux Local Terminal
 
-```bash
-ls ~/.ssh
-```
-
-如果没有 SSH 密钥，生成新的 ed25519 密钥：
+Generate an SSH key if you do not already have one:
 
 ```bash
-ssh-keygen -t ed25519 -C "your_email@example.com"
+ssh-keygen -t ed25519 -C "vpsguard"
 ```
 
-查看公钥内容：
+Show your public key:
 
 ```bash
 cat ~/.ssh/id_ed25519.pub
 ```
 
-需要把 `.pub` 公钥内容添加到 VPS 的 `~/.ssh/authorized_keys`。
-
-VPSGuard 安装完成后，默认使用新用户登录：
+Copy the public key to the new VPS if `ssh-copy-id` is available:
 
 ```bash
-ssh alex@你的服务器IP
+ssh-copy-id -i ~/.ssh/id_ed25519.pub root@YOUR_SERVER_IP
 ```
 
-如果使用指定私钥路径：
+If `ssh-copy-id` is not available, log in as root with the initial VPS password:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 alex@你的服务器IP
+ssh root@YOUR_SERVER_IP
 ```
 
-请确认新用户可以使用 SSH 私钥登录后，再关闭当前 root 会话，避免把自己锁在服务器外面。
-
-## Quick Start
-
-Run as root:
+Then create and edit `/root/.ssh/authorized_keys`:
 
 ```bash
-apt update && apt install -y curl && bash <(curl -fsSL https://raw.githubusercontent.com/hexa46656-creator/vpsguard/main/install.sh)
+mkdir -p /root/.ssh
+chmod 700 /root/.ssh
+nano /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
 ```
 
-If your system requires sudo:
+One-line append example:
 
 ```bash
-sudo apt update && sudo apt install -y curl
+mkdir -p /root/.ssh && chmod 700 /root/.ssh && echo 'PASTE_YOUR_PUBLIC_KEY_HERE' >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
+```
+
+Replace `PASTE_YOUR_PUBLIC_KEY_HERE` with your real public key, not your private key.
+
+## Termius
+
+1. Open Termius.
+2. Go to Keychain.
+3. Select or create an SSH Key.
+4. Copy the Public Key, not the Private Key.
+5. Create a new Host for the VPS.
+6. Log in as root using the initial VPS password.
+7. Add the Public Key to `/root/.ssh/authorized_keys`.
+8. Change the Host authentication method to Key.
+9. Select the same Termius private key.
+10. Test root key login before running VPSGuard.
+
+---
+
+# 运行 VPSGuard 前的 SSH 密钥准备
+
+> 重要：运行 VPSGuard 之前，root 账户的 `/root/.ssh/authorized_keys` 里必须已经有至少一个 SSH 公钥。
+
+在一台全新的 VPS 上运行 VPSGuard 之前，请先确认 SSH 密钥登录已经准备好。
+
+关键规则：
+
+- Private Key / 私钥保留在你的本地电脑、手机或 Termius 里。
+- Public Key / 公钥复制到 VPS。
+- 绝对不要把 Private Key / 私钥粘贴或上传到 VPS。
+- VPSGuard 运行前要求 `/root/.ssh/authorized_keys` 已经存在，并且里面至少有一个 SSH 公钥。
+- VPSGuard 会把 root 账户已有的 SSH 公钥复制给脚本创建的新 sudo 用户。
+- 安装完成后，用户应该使用新用户和同一个私钥登录。
+
+## macOS / Linux 本地终端
+
+如果你还没有 SSH Key，可以生成一个：
+
+```bash
+ssh-keygen -t ed25519 -C "vpsguard"
+```
+
+查看公钥：
+
+```bash
+cat ~/.ssh/id_ed25519.pub
+```
+
+如果本地支持 `ssh-copy-id`，可以直接复制公钥到新 VPS：
+
+```bash
+ssh-copy-id -i ~/.ssh/id_ed25519.pub root@YOUR_SERVER_IP
+```
+
+如果没有 `ssh-copy-id`，先用 VPS 初始 root 密码登录：
+
+```bash
+ssh root@YOUR_SERVER_IP
+```
+
+然后创建并编辑 `/root/.ssh/authorized_keys`：
+
+```bash
+mkdir -p /root/.ssh
+chmod 700 /root/.ssh
+nano /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+```
+
+也可以用一行命令追加公钥：
+
+```bash
+mkdir -p /root/.ssh && chmod 700 /root/.ssh && echo 'PASTE_YOUR_PUBLIC_KEY_HERE' >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
+```
+
+请把 `PASTE_YOUR_PUBLIC_KEY_HERE` 替换成你的真实公钥，不是私钥。
+
+## Termius 操作步骤
+
+1. 打开 Termius。
+2. 进入 Keychain。
+3. 选择已有 SSH Key，或新建一个 SSH Key。
+4. 复制 Public Key，不要复制 Private Key。
+5. 新建 VPS Host。
+6. 先用 VPS 初始 root 密码登录。
+7. 把 Public Key 添加到 `/root/.ssh/authorized_keys`。
+8. 把 Host 的认证方式改成 Key。
+9. 选择对应的 Termius 私钥。
+10. 确认 root 可以使用密钥登录后，再运行 VPSGuard。
+
+---
+
+# One-click Deployment
+
+Run the command below as root only after your SSH public key has been added to `/root/.ssh/authorized_keys`.
+
+curl version:
+
+```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/hexa46656-creator/vpsguard/main/install.sh)
 ```
 
-## Default User
-
-The default new user is:
+wget version:
 
 ```bash
-alex
+bash <(wget -qO- https://raw.githubusercontent.com/hexa46656-creator/vpsguard/main/install.sh)
 ```
 
-After installation, test login from your local computer:
+---
+
+# 一键部署
+
+只有在你已经把 SSH 公钥添加到 `/root/.ssh/authorized_keys` 之后，才使用 root 运行下面的一键部署命令。
+
+curl 版本：
 
 ```bash
-ssh alex@YOUR_SERVER_IP -p 22
+bash <(curl -fsSL https://raw.githubusercontent.com/hexa46656-creator/vpsguard/main/install.sh)
 ```
 
-Then test sudo:
+wget 版本：
+
+```bash
+bash <(wget -qO- https://raw.githubusercontent.com/hexa46656-creator/vpsguard/main/install.sh)
+```
+
+---
+
+# After Installation Login
+
+After VPSGuard finishes, do not keep using root login. Log in with the new sudo user:
+
+```bash
+ssh vpsguard@YOUR_SERVER_IP -p 22
+```
+
+For Termius after installation:
+
+- Host username: `vpsguard`
+- Authentication: `Key`
+- Selected Key: the same private key whose public key was added before running VPSGuard.
+- Do not use root login.
+- Do not use password login.
+
+Test sudo after logging in:
 
 ```bash
 sudo whoami
@@ -119,30 +240,37 @@ Expected output:
 root
 ```
 
-## Default Open Ports
+---
 
-VPSGuard only allows the current SSH port by default.
+# 安装后登录
 
-Usually this means:
-
-```bash
-22/tcp
-```
-
-It does not open `80`, `443`, `8443`, or other service ports automatically.
-
-If you deploy a website later:
+VPSGuard 安装完成后，不要继续使用 root 登录。请使用新 sudo 用户登录：
 
 ```bash
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
+ssh vpsguard@YOUR_SERVER_IP -p 22
 ```
 
-If you deploy a custom service later:
+Termius 安装后设置：
+
+- 用户名改成 `vpsguard`
+- 认证方式选择 `Key`
+- 选择之前添加公钥时对应的同一个私钥
+- 不要使用 root 登录
+- 不要使用密码登录
+
+登录后测试 sudo：
 
 ```bash
-sudo ufw allow YOUR_PORT/tcp
+sudo whoami
 ```
+
+预期输出：
+
+```bash
+root
+```
+
+---
 
 ## Custom User
 
@@ -178,10 +306,10 @@ bash uninstall.sh
 
 Do not close your current root SSH session immediately after running VPSGuard.
 
-Open a new terminal window and test:
+Open a new terminal window and test the new sudo user login first:
 
 ```bash
-ssh alex@YOUR_SERVER_IP -p 22
+ssh vpsguard@YOUR_SERVER_IP -p 22
 sudo whoami
 ```
 

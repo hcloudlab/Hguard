@@ -3,10 +3,10 @@ set -euo pipefail
 
 # VPSGuard
 # One-click Ubuntu LTS VPS initialization and SSH security hardening tool.
-# Default user: alex
+# Default user: vpsguard
 # Supported OS: Ubuntu LTS only
 
-NEW_USER="${NEW_USER:-alex}"
+NEW_USER="${NEW_USER:-vpsguard}"
 SSH_PORT="${SSH_PORT:-}"
 SSHD_CONFIG="/etc/ssh/sshd_config"
 FAIL2BAN_JAIL="/etc/fail2ban/jail.d/sshd.local"
@@ -74,7 +74,15 @@ detect_ssh_port() {
 
 check_root_ssh_key() {
   if [ ! -s /root/.ssh/authorized_keys ]; then
-    error "No SSH public key found at /root/.ssh/authorized_keys. To avoid lockout, add an SSH key first before running VPSGuard."
+    error "Root SSH public key is missing.
+Please add your SSH public key to /root/.ssh/authorized_keys before running VPSGuard.
+Do not paste your private key into the VPS.
+For Termius: Keychain → Key → Public Key → Copy.
+
+未检测到 root 的 SSH 公钥。
+请先把你的 SSH 公钥添加到 /root/.ssh/authorized_keys 后再运行 VPSGuard。
+不要把私钥粘贴到 VPS。
+Termius 用户：Keychain → Key → Public Key → Copy，复制 Public Key。"
   fi
 
   info "Root SSH authorized_keys found."
