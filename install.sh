@@ -218,6 +218,53 @@ set_sshd_option() {
   fi
 }
 
+verify_ssh_service_available() {
+  systemctl is-active --quiet ssh.service || ss -tulpn | grep -q ":${SSH_PORT}"
+}
+
+ssh_service_error() {
+  error "SSH service did not become available after applying hardened configuration.
+Do NOT close this root session until SSH login is verified.
+Please run:
+systemctl status ssh --no-pager
+systemctl status ssh.socket --no-pager
+sshd -t
+ss -tulpn | grep ':${SSH_PORT}'"
+}
+
+apply_ssh_service_changes() {
+  local applied=0
+  local success_message=""
+
+  if systemctl is-active --quiet ssh.service; then
+    if systemctl reload ssh.service; then
+      applied=1
+      success_message="SSH hardened and reloaded."
+    elif systemctl restart ssh.service; then
+      applied=1
+      success_message="SSH hardened and restarted."
+    fi
+  elif systemctl is-active --quiet ssh.socket; then
+    if systemctl restart ssh.service || systemctl start ssh.service; then
+      applied=1
+      success_message="SSH hardened and started via ssh.socket-compatible path."
+    fi
+  elif systemctl restart ssh.service; then
+    applied=1
+    success_message="SSH hardened and restarted."
+  fi
+
+  if [ "$applied" -eq 1 ] && verify_ssh_service_available; then
+    if [ -n "$success_message" ]; then
+      info "$success_message"
+    else
+      info "SSH hardened and listening on port ${SSH_PORT}."
+    fi
+  else
+    ssh_service_error
+  fi
+}
+
 harden_ssh() {
   info "Hardening SSH..."
 
@@ -263,9 +310,7 @@ This can be caused by sshd_config syntax, missing runtime directories, or platfo
 Please also check that /run/sshd exists and has correct permissions."
   fi
 
-  systemctl reload ssh || systemctl restart ssh
-
-  info "SSH hardened and reloaded."
+  apply_ssh_service_changes
 }
 
 final_check() {
