@@ -3,12 +3,13 @@ set -euo pipefail
 
 # VPSGuard
 # One-click Ubuntu LTS VPS initialization and SSH security hardening tool.
-# Default user: vpsguard
+# Default user: alex
 # Supported OS: Ubuntu LTS only
 
-NEW_USER="${NEW_USER:-vpsguard}"
+NEW_USER="${NEW_USER:-alex}"
 SSH_PORT="${SSH_PORT:-}"
 SSHD_CONFIG="/etc/ssh/sshd_config"
+SSHD_BACKUP_FILE=""
 FAIL2BAN_JAIL="/etc/fail2ban/jail.d/sshd.local"
 
 GREEN="\033[32m"
@@ -192,17 +193,18 @@ findtime = 10m
 bantime = 1h
 EOF
 
-  systemctl enable --now fail2ban
+  systemctl enable fail2ban
   systemctl restart fail2ban
+  sleep 3
 
   info "fail2ban configured."
   fail2ban-client status sshd || warn "fail2ban sshd status check failed."
 }
 
 backup_sshd_config() {
-  local backup_file="/etc/ssh/sshd_config.bak.$(date +%Y%m%d%H%M%S)"
-  cp "$SSHD_CONFIG" "$backup_file"
-  info "SSH config backup created: $backup_file"
+  SSHD_BACKUP_FILE="/etc/ssh/sshd_config.bak.$(date +%Y%m%d%H%M%S)"
+  cp "$SSHD_CONFIG" "$SSHD_BACKUP_FILE"
+  info "SSH config backup created: $SSHD_BACKUP_FILE"
 }
 
 set_sshd_option() {
@@ -249,10 +251,16 @@ harden_ssh() {
   # This reduces unnecessary SSH features and lowers the attack surface on a server.
   set_sshd_option "X11Forwarding" "no"
 
+  mkdir -p /run/sshd
+  chmod 755 /run/sshd
+
   if sshd -t; then
     info "SSH configuration test passed."
   else
-    error "SSH configuration test failed. Please restore from backup."
+    error "SSH configuration test failed.
+Backup file: ${SSHD_BACKUP_FILE}
+This can be caused by sshd_config syntax, missing runtime directories, or platform-specific SSH service requirements.
+Please also check that /run/sshd exists and has correct permissions."
   fi
 
   systemctl reload ssh || systemctl restart ssh

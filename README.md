@@ -9,7 +9,7 @@ It is designed for a brand-new VPS after the first root login.
 - Checks Ubuntu LTS system compatibility
 - Updates system packages
 - Installs basic server tools
-- Creates a new sudo user: `vpsguard`
+- Creates a new sudo user: `alex`
 - Copies root SSH public keys to the new sudo user
 - Tests sudo permission
 - Installs and configures UFW firewall
@@ -217,12 +217,12 @@ bash <(wget -qO- https://raw.githubusercontent.com/hexa46656-creator/vpsguard/ma
 After VPSGuard finishes, do not keep using root login. Log in with the new sudo user:
 
 ```bash
-ssh vpsguard@YOUR_SERVER_IP -p 22
+ssh alex@YOUR_SERVER_IP -p 22
 ```
 
 For Termius after installation:
 
-- Host username: `vpsguard`
+- Host username: `alex`
 - Authentication: `Key`
 - Selected Key: the same private key whose public key was added before running VPSGuard.
 - Do not use root login.
@@ -247,12 +247,12 @@ root
 VPSGuard 安装完成后，不要继续使用 root 登录。请使用新 sudo 用户登录：
 
 ```bash
-ssh vpsguard@YOUR_SERVER_IP -p 22
+ssh alex@YOUR_SERVER_IP -p 22
 ```
 
 Termius 安装后设置：
 
-- 用户名改成 `vpsguard`
+- 用户名改成 `alex`
 - 认证方式选择 `Key`
 - 选择之前添加公钥时对应的同一个私钥
 - 不要使用 root 登录
@@ -309,7 +309,7 @@ Do not close your current root SSH session immediately after running VPSGuard.
 Open a new terminal window and test the new sudo user login first:
 
 ```bash
-ssh vpsguard@YOUR_SERVER_IP -p 22
+ssh alex@YOUR_SERVER_IP -p 22
 sudo whoami
 ```
 
