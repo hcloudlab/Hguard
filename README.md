@@ -47,6 +47,7 @@ VPSGuard is designed to be safe to re-run.
 - Existing users are reused.
 - Existing SSH key entries are merged without duplicates.
 - Existing sudoers rules are replaced in-place.
+- The new user can run `sudo -i` without a password.
 - Existing UFW rules are preserved when already initialized.
 - State markers are stored under `/etc/vpsguard/`.
 
@@ -69,6 +70,7 @@ VPSGuard 设计为可以安全重复运行。
 - 已存在的用户会直接复用。
 - SSH 公钥会合并，避免重复。
 - sudoers 规则会原地更新，不会叠加重复项。
+- 新用户可以免密执行 `sudo -i`。
 - 已初始化的 UFW 规则会保留。
 - 状态标记保存在 `/etc/vpsguard/`。
 
@@ -336,15 +338,15 @@ For Termius after installation:
 - Do not use root login.
 - Do not use password login.
 
-Test restricted sudo after logging in:
+Test passwordless sudo after logging in:
 
 ```bash
-sudo ufw status verbose
+sudo -i
 ```
 
 Expected output:
 
-The UFW status output should be displayed without a password prompt.
+A root shell prompt should open without a password prompt.
 
 ---
 
@@ -364,10 +366,10 @@ Termius 安装后设置：
 - 不要使用 root 登录
 - 不要使用密码登录
 
-登录后测试受限 sudo：
+登录后测试免密 sudo：
 
 ```bash
-sudo ufw status verbose
+sudo -i
 ```
 
 预期输出：

@@ -180,21 +180,9 @@ create_user() {
 }
 
 configure_sudo() {
-  local systemctl_bin
-  local ufw_bin
-  local journalctl_bin
-
-  systemctl_bin="$(command -v systemctl || true)"
-  ufw_bin="$(command -v ufw || true)"
-  journalctl_bin="$(command -v journalctl || true)"
-
-  if [ -z "$systemctl_bin" ] || [ -z "$ufw_bin" ] || [ -z "$journalctl_bin" ]; then
-    error "Required admin commands were not found in PATH. Cannot configure restricted sudo safely."
-  fi
-
-  info "Configuring restricted passwordless sudo for $NEW_USER..."
+  info "Configuring passwordless sudo for $NEW_USER..."
   cat >"/etc/sudoers.d/90-${NEW_USER}" <<EOF
-${NEW_USER} ALL=(ALL) NOPASSWD: ${systemctl_bin}, ${ufw_bin}, ${journalctl_bin}
+${NEW_USER} ALL=(ALL) NOPASSWD: ALL
 EOF
 
   chmod 440 "/etc/sudoers.d/90-${NEW_USER}"
@@ -229,8 +217,8 @@ setup_ssh_key() {
 test_sudo_user() {
   info "Testing sudo permission for $NEW_USER..."
 
-  if sudo -u "$NEW_USER" sudo -n "$(command -v ufw)" status >/dev/null 2>&1; then
-    info "$NEW_USER can use restricted sudo successfully."
+  if sudo -u "$NEW_USER" sudo -n -i true >/dev/null 2>&1; then
+    info "$NEW_USER can use passwordless sudo -i successfully."
   else
     error "$NEW_USER sudo test failed. Stop before changing SSH settings."
   fi
@@ -452,13 +440,13 @@ final_check() {
   echo
   echo -e "  ${BOLD}ssh ${NEW_USER}@${server_ip} -p ${SSH_PORT}${NC}"
   echo
-  echo -e "${YELLOW}${BOLD}Then test restricted sudo:${NC}"
+  echo -e "${YELLOW}${BOLD}Then test passwordless sudo:${NC}"
   echo
-  echo -e "  ${BOLD}sudo ufw status verbose${NC}"
+  echo -e "  ${BOLD}sudo -i${NC}"
   echo
   echo -e "${YELLOW}${BOLD}Expected output:${NC}"
   echo
-  echo -e "  ${GREEN}${BOLD}UFW status details or active rules${NC}"
+  echo -e "  ${GREEN}${BOLD}A root shell prompt without a password prompt${NC}"
   echo
   echo -e "${RED}${BOLD}IMPORTANT:${NC}"
   echo -e "${RED}${BOLD}Do NOT close this root session until the new ${NEW_USER} SSH login works.${NC}"
