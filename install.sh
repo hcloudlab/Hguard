@@ -8,11 +8,16 @@ set -euo pipefail
 
 NEW_USER="${NEW_USER:-alex}"
 SSH_PORT="${SSH_PORT:-}"
+UFW_RESET_ENABLED="${UFW_RESET_ENABLED:-true}"
 SSHD_CONFIG="/etc/ssh/sshd_config"
 SSHD_BACKUP_FILE=""
 FAIL2BAN_JAIL="/etc/fail2ban/jail.d/sshd.local"
 VPSGUARD_STATE_DIR="/etc/vpsguard"
-VPSGUARD_INITIALIZED_MARKER="/etc/vpsguard/.initialized"
+VPSGUARD_CONFIG_FILE="/etc/vpsguard/config.env"
+VPSGUARD_INSTALLED_MARKER="/etc/vpsguard/.installed"
+VPSGUARD_SSH_DONE_MARKER="/etc/vpsguard/.ssh_done"
+VPSGUARD_SUDO_DONE_MARKER="/etc/vpsguard/.sudo_done"
+VPSGUARD_UFW_DONE_MARKER="/etc/vpsguard/.ufw_done"
 
 GREEN="\033[32m"
 YELLOW="\033[33m"
@@ -34,6 +39,44 @@ warn() {
 error() {
   echo -e "${RED}[ERROR]${NC} $1"
   exit 1
+}
+
+ensure_state_dir() {
+  mkdir -p "$VPSGUARD_STATE_DIR"
+}
+
+load_config_env() {
+  if [ -f "$VPSGUARD_CONFIG_FILE" ]; then
+    # shellcheck disable=SC1090
+    . "$VPSGUARD_CONFIG_FILE"
+  fi
+
+  NEW_USER="${NEW_USER:-alex}"
+  SSH_PORT="${SSH_PORT:-22}"
+  UFW_RESET_ENABLED="${UFW_RESET_ENABLED:-true}"
+}
+
+write_config_value() {
+  local key="$1"
+  local value="$2"
+
+  if grep -q "^${key}=" "$VPSGUARD_CONFIG_FILE" 2>/dev/null; then
+    sed -i -E "s|^${key}=.*|${key}=${value}|" "$VPSGUARD_CONFIG_FILE"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$VPSGUARD_CONFIG_FILE"
+  fi
+}
+
+persist_config_env() {
+  ensure_state_dir
+  if [ ! -f "$VPSGUARD_CONFIG_FILE" ]; then
+    printf '%s\n' "# VPSGuard config" > "$VPSGUARD_CONFIG_FILE"
+  fi
+
+  write_config_value "NEW_USER" "$NEW_USER"
+  write_config_value "SSH_PORT" "$SSH_PORT"
+  write_config_value "UFW_RESET_ENABLED" "$UFW_RESET_ENABLED"
+  chmod 600 "$VPSGUARD_CONFIG_FILE"
 }
 
 require_root() {
@@ -62,15 +105,21 @@ check_ubuntu_lts() {
 }
 
 detect_ssh_port() {
-  if [ -n "$SSH_PORT" ]; then
-    info "Using custom SSH port: $SSH_PORT"
+  local detected_port
+
+  if [ -f "$VPSGUARD_CONFIG_FILE" ] && [ -n "${SSH_PORT:-}" ]; then
+    info "Using configured SSH port: $SSH_PORT"
     return
   fi
 
-  SSH_PORT="$(sshd -T 2>/dev/null | awk '/^port / {print $2; exit}' || true)"
+  detected_port="$(sshd -T 2>/dev/null | awk '/^port / {print $2; exit}' || true)"
 
-  if [ -z "$SSH_PORT" ]; then
-    SSH_PORT="22"
+  if [ -z "$detected_port" ]; then
+    detected_port="22"
+  fi
+
+  if [ -z "${SSH_PORT:-}" ] || [ ! -f "$VPSGUARD_CONFIG_FILE" ]; then
+    SSH_PORT="$detected_port"
   fi
 
   info "Detected SSH port: $SSH_PORT"
@@ -128,7 +177,9 @@ create_user() {
 
   info "Adding $NEW_USER to sudo group..."
   usermod -aG sudo "$NEW_USER"
+}
 
+configure_sudo() {
   local systemctl_bin
   local ufw_bin
   local journalctl_bin
@@ -159,13 +210,20 @@ setup_ssh_key() {
   info "Configuring SSH key for $NEW_USER..."
 
   mkdir -p "/home/${NEW_USER}/.ssh"
-  cp /root/.ssh/authorized_keys "/home/${NEW_USER}/.ssh/authorized_keys"
+  chmod 700 "/home/${NEW_USER}/.ssh"
+
+  if [ ! -s /root/.ssh/authorized_keys ]; then
+    error "Root authorized_keys is missing or empty."
+  fi
+
+  touch "/home/${NEW_USER}/.ssh/authorized_keys"
+  awk 'NF && !seen[$0]++' /root/.ssh/authorized_keys "/home/${NEW_USER}/.ssh/authorized_keys" > "/home/${NEW_USER}/.ssh/authorized_keys.tmp"
+  mv "/home/${NEW_USER}/.ssh/authorized_keys.tmp" "/home/${NEW_USER}/.ssh/authorized_keys"
 
   chown -R "${NEW_USER}:${NEW_USER}" "/home/${NEW_USER}/.ssh"
-  chmod 700 "/home/${NEW_USER}/.ssh"
   chmod 600 "/home/${NEW_USER}/.ssh/authorized_keys"
 
-  info "SSH key copied to /home/${NEW_USER}/.ssh/authorized_keys"
+  info "SSH key entries synced to /home/${NEW_USER}/.ssh/authorized_keys"
 }
 
 test_sudo_user() {
@@ -184,23 +242,37 @@ configure_ufw() {
   info "Allowing SSH port only: ${SSH_PORT}/tcp"
   mkdir -p "$VPSGUARD_STATE_DIR"
 
-  if [ -f "$VPSGUARD_INITIALIZED_MARKER" ] || ufw status 2>/dev/null | grep -q "^Status: active"; then
-    warn "UFW is already initialized or active. Skipping reset to preserve existing firewall rules."
-    ufw allow "${SSH_PORT}/tcp" || warn "Could not re-apply SSH port allow rule, please verify UFW manually."
-    touch "$VPSGUARD_INITIALIZED_MARKER"
-    if ufw status 2>/dev/null | grep -q "^Status: inactive"; then
-      info "UFW is inactive. Enabling without resetting existing rules."
-      ufw --force enable
+  if [ -f "$VPSGUARD_UFW_DONE_MARKER" ]; then
+    warn "UFW phase already completed. Skipping firewall changes."
+    return 0
+  fi
+
+  if [ -f "$VPSGUARD_INSTALLED_MARKER" ]; then
+    warn "VPSGuard is already installed. Skipping destructive firewall changes."
+  fi
+
+  if ufw status 2>/dev/null | grep -q "^Status: active"; then
+    warn "UFW is already active. Preserving existing rules."
+    if ! ufw status numbered 2>/dev/null | grep -q "${SSH_PORT}/tcp"; then
+      ufw allow "${SSH_PORT}/tcp" || warn "Could not add SSH allow rule, please verify UFW manually."
     fi
   else
-    info "First run detected. Applying fresh UFW rules."
-    ufw --force reset
-    ufw default deny incoming
-    ufw default allow outgoing
-    ufw allow "${SSH_PORT}/tcp"
+    if [ "${UFW_RESET_ENABLED}" = "true" ] && [ ! -f "$VPSGUARD_INSTALLED_MARKER" ]; then
+      info "First run detected. Applying fresh UFW rules."
+      ufw --force reset
+      ufw default deny incoming
+      ufw default allow outgoing
+    else
+      warn "UFW reset disabled or this is a re-run. Skipping reset and preserving existing rules."
+    fi
+
+    if ! ufw status numbered 2>/dev/null | grep -q "${SSH_PORT}/tcp"; then
+      ufw allow "${SSH_PORT}/tcp"
+    fi
     ufw --force enable
-    touch "$VPSGUARD_INITIALIZED_MARKER"
   fi
+
+  touch "$VPSGUARD_UFW_DONE_MARKER"
 
   if ufw status 2>/dev/null | grep -q "^Status: active"; then
     info "UFW enabled. SSH port ${SSH_PORT}/tcp is allowed."
@@ -234,7 +306,13 @@ EOF
 }
 
 backup_sshd_config() {
-  SSHD_BACKUP_FILE="/etc/ssh/sshd_config.bak.$(date +%Y%m%d%H%M%S)"
+  SSHD_BACKUP_FILE="/etc/ssh/sshd_config.bak.vpsguard"
+
+  if [ -f "$SSHD_BACKUP_FILE" ]; then
+    info "SSH config backup already exists: $SSHD_BACKUP_FILE"
+    return 0
+  fi
+
   cp "$SSHD_CONFIG" "$SSHD_BACKUP_FILE"
   info "SSH config backup created: $SSHD_BACKUP_FILE"
 }
@@ -395,19 +473,69 @@ final_check() {
   echo
 }
 
-main() {
+phase_1_preflight_checks() {
   require_root
   check_ubuntu_lts
+}
+
+phase_2_config_loading() {
+  ensure_state_dir
+  load_config_env
   detect_ssh_port
+  persist_config_env
+}
+
+phase_3_user_setup() {
+  if [ -f "$VPSGUARD_SSH_DONE_MARKER" ]; then
+    info "Phase 3 already completed. Skipping user setup."
+    return 0
+  fi
+
   check_root_ssh_key
   upgrade_system
   create_user
   setup_ssh_key
-  test_sudo_user
-  configure_ufw
-  configure_fail2ban
+  touch "$VPSGUARD_SSH_DONE_MARKER"
+}
+
+phase_4_ssh_hardening() {
+  if [ -f "$VPSGUARD_INSTALLED_MARKER" ]; then
+    info "SSH hardening already applied. Skipping."
+    return 0
+  fi
+
   harden_ssh
+  configure_fail2ban
+}
+
+phase_5_sudo_configuration() {
+  if [ -f "$VPSGUARD_SUDO_DONE_MARKER" ]; then
+    info "Sudo configuration already completed. Skipping."
+    return 0
+  fi
+
+  configure_sudo
+  test_sudo_user
+  touch "$VPSGUARD_SUDO_DONE_MARKER"
+}
+
+phase_6_firewall_configuration() {
+  configure_ufw
+}
+
+phase_7_validation() {
   final_check
+  touch "$VPSGUARD_INSTALLED_MARKER"
+}
+
+main() {
+  phase_1_preflight_checks
+  phase_2_config_loading
+  phase_3_user_setup
+  phase_4_ssh_hardening
+  phase_5_sudo_configuration
+  phase_6_firewall_configuration
+  phase_7_validation
 }
 
 main "$@"

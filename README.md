@@ -9,7 +9,7 @@ It is designed for a brand-new VPS after the first root login.
 - Checks Ubuntu LTS system compatibility
 - Updates system packages
 - Installs basic server tools
-- Creates a new sudo user: `alex`
+- Creates a new sudo user: `alex` by default
 - Copies root SSH public keys to the new sudo user
 - Tests sudo permission
 - Installs and configures UFW firewall
@@ -27,6 +27,50 @@ Recommended:
 
 - Ubuntu 22.04 LTS
 - Ubuntu 24.04 LTS
+
+## Configuration File
+
+VPSGuard stores its runtime config in `/etc/vpsguard/config.env`.
+
+Default values:
+
+- `NEW_USER=alex`
+- `SSH_PORT=22`
+- `UFW_RESET_ENABLED=true`
+
+You can edit this file before re-running VPSGuard to standardize the same values across install, status, and uninstall flows.
+
+## Idempotent Re-run Behavior
+
+VPSGuard is designed to be safe to re-run.
+
+- Existing users are reused.
+- Existing SSH key entries are merged without duplicates.
+- Existing sudoers rules are replaced in-place.
+- Existing UFW rules are preserved when already initialized.
+- State markers are stored under `/etc/vpsguard/`.
+
+## 配置文件
+
+VPSGuard 会把运行时配置保存到 `/etc/vpsguard/config.env`。
+
+默认值如下：
+
+- `NEW_USER=alex`
+- `SSH_PORT=22`
+- `UFW_RESET_ENABLED=true`
+
+你可以在重新运行 VPSGuard 之前先修改这个文件，让安装、状态检查和卸载都使用同一套配置。
+
+## 幂等重跑
+
+VPSGuard 设计为可以安全重复运行。
+
+- 已存在的用户会直接复用。
+- SSH 公钥会合并，避免重复。
+- sudoers 规则会原地更新，不会叠加重复项。
+- 已初始化的 UFW 规则会保留。
+- 状态标记保存在 `/etc/vpsguard/`。
 
 ---
 

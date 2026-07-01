@@ -7,6 +7,21 @@ RED="\033[31m"
 BOLD="\033[1m"
 NC="\033[0m"
 NEW_USER="${NEW_USER:-alex}"
+SSH_PORT="${SSH_PORT:-22}"
+UFW_RESET_ENABLED="${UFW_RESET_ENABLED:-true}"
+VPSGUARD_CONFIG_FILE="/etc/vpsguard/config.env"
+VPSGUARD_STATE_DIR="/etc/vpsguard"
+
+load_config_env() {
+  if [ -f "$VPSGUARD_CONFIG_FILE" ]; then
+    # shellcheck disable=SC1090
+    . "$VPSGUARD_CONFIG_FILE"
+  fi
+
+  NEW_USER="${NEW_USER:-alex}"
+  SSH_PORT="${SSH_PORT:-22}"
+  UFW_RESET_ENABLED="${UFW_RESET_ENABLED:-true}"
+}
 
 info() {
   echo -e "${GREEN}[INFO]${NC} $1"
@@ -24,6 +39,8 @@ error() {
 if [ "$(id -u)" -ne 0 ]; then
   error "Please run this script as root."
 fi
+
+load_config_env
 
 echo
 warn "This will disable UFW and fail2ban."
@@ -64,10 +81,18 @@ if command -v ufw >/dev/null 2>&1; then
   ufw --force disable
 fi
 
+info "Removing VPSGuard state files..."
+rm -f "$VPSGUARD_CONFIG_FILE" \
+  "$VPSGUARD_STATE_DIR/.installed" \
+  "$VPSGUARD_STATE_DIR/.ssh_done" \
+  "$VPSGUARD_STATE_DIR/.sudo_done" \
+  "$VPSGUARD_STATE_DIR/.ufw_done"
+
 info "Uninstall completed."
 echo
 echo "SSH configuration was not changed."
 echo "User ${NEW_USER} was not deleted."
+echo "Config file: ${VPSGUARD_CONFIG_FILE}"
 echo
 echo "To manually edit SSH config:"
 echo "  nano /etc/ssh/sshd_config"

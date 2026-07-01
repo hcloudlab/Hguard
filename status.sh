@@ -7,6 +7,20 @@ CYAN="\033[36m"
 BOLD="\033[1m"
 NC="\033[0m"
 NEW_USER="${NEW_USER:-alex}"
+SSH_PORT="${SSH_PORT:-22}"
+UFW_RESET_ENABLED="${UFW_RESET_ENABLED:-true}"
+VPSGUARD_CONFIG_FILE="/etc/vpsguard/config.env"
+
+load_config_env() {
+  if [ -f "$VPSGUARD_CONFIG_FILE" ]; then
+    # shellcheck disable=SC1090
+    . "$VPSGUARD_CONFIG_FILE"
+  fi
+
+  NEW_USER="${NEW_USER:-alex}"
+  SSH_PORT="${SSH_PORT:-22}"
+  UFW_RESET_ENABLED="${UFW_RESET_ENABLED:-true}"
+}
 
 info() {
   echo -e "${GREEN}[INFO]${NC} $1"
@@ -21,10 +35,18 @@ section() {
   echo -e "${CYAN}${BOLD}==> $1${NC}"
 }
 
+load_config_env
+
 section "System information"
 echo "Hostname: $(hostname)"
 echo "Uptime: $(uptime -p)"
 echo "Kernel: $(uname -r)"
+
+section "VPSGuard config"
+echo "Config file: ${VPSGUARD_CONFIG_FILE}"
+echo "NEW_USER: ${NEW_USER}"
+echo "SSH_PORT: ${SSH_PORT}"
+echo "UFW_RESET_ENABLED: ${UFW_RESET_ENABLED}"
 
 section "OS"
 grep -E "PRETTY_NAME|VERSION_ID|VERSION=" /etc/os-release || true
