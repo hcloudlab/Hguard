@@ -11,6 +11,8 @@ SSH_PORT="${SSH_PORT:-}"
 SSHD_CONFIG="/etc/ssh/sshd_config"
 SSHD_BACKUP_FILE=""
 FAIL2BAN_JAIL="/etc/fail2ban/jail.d/sshd.local"
+VPSGUARD_STATE_DIR="/etc/vpsguard"
+VPSGUARD_INITIALIZED_MARKER="/etc/vpsguard/.initialized"
 
 GREEN="\033[32m"
 YELLOW="\033[33m"
@@ -45,6 +47,7 @@ check_ubuntu_lts() {
     error "Cannot detect OS. /etc/os-release not found."
   fi
 
+  # shellcheck disable=SC1091
   . /etc/os-release
 
   if [ "${ID:-}" != "ubuntu" ]; then
@@ -126,9 +129,21 @@ create_user() {
   info "Adding $NEW_USER to sudo group..."
   usermod -aG sudo "$NEW_USER"
 
-  info "Configuring passwordless sudo for $NEW_USER..."
+  local systemctl_bin
+  local ufw_bin
+  local journalctl_bin
+
+  systemctl_bin="$(command -v systemctl || true)"
+  ufw_bin="$(command -v ufw || true)"
+  journalctl_bin="$(command -v journalctl || true)"
+
+  if [ -z "$systemctl_bin" ] || [ -z "$ufw_bin" ] || [ -z "$journalctl_bin" ]; then
+    error "Required admin commands were not found in PATH. Cannot configure restricted sudo safely."
+  fi
+
+  info "Configuring restricted passwordless sudo for $NEW_USER..."
   cat >"/etc/sudoers.d/90-${NEW_USER}" <<EOF
-${NEW_USER} ALL=(ALL) NOPASSWD:ALL
+${NEW_USER} ALL=(ALL) NOPASSWD: ${systemctl_bin}, ${ufw_bin}, ${journalctl_bin}
 EOF
 
   chmod 440 "/etc/sudoers.d/90-${NEW_USER}"
@@ -156,8 +171,8 @@ setup_ssh_key() {
 test_sudo_user() {
   info "Testing sudo permission for $NEW_USER..."
 
-  if sudo -u "$NEW_USER" sudo -n whoami | grep -q root; then
-    info "$NEW_USER can use sudo successfully."
+  if sudo -u "$NEW_USER" sudo -n "$(command -v ufw)" status >/dev/null 2>&1; then
+    info "$NEW_USER can use restricted sudo successfully."
   else
     error "$NEW_USER sudo test failed. Stop before changing SSH settings."
   fi
@@ -166,17 +181,34 @@ test_sudo_user() {
 configure_ufw() {
   info "Configuring UFW firewall..."
 
-  ufw --force reset
-  ufw default deny incoming
-  ufw default allow outgoing
-
   info "Allowing SSH port only: ${SSH_PORT}/tcp"
-  ufw allow "${SSH_PORT}/tcp"
+  mkdir -p "$VPSGUARD_STATE_DIR"
 
-  ufw --force enable
+  if [ -f "$VPSGUARD_INITIALIZED_MARKER" ] || ufw status 2>/dev/null | grep -q "^Status: active"; then
+    warn "UFW is already initialized or active. Skipping reset to preserve existing firewall rules."
+    ufw allow "${SSH_PORT}/tcp" || warn "Could not re-apply SSH port allow rule, please verify UFW manually."
+    touch "$VPSGUARD_INITIALIZED_MARKER"
+    if ufw status 2>/dev/null | grep -q "^Status: inactive"; then
+      info "UFW is inactive. Enabling without resetting existing rules."
+      ufw --force enable
+    fi
+  else
+    info "First run detected. Applying fresh UFW rules."
+    ufw --force reset
+    ufw default deny incoming
+    ufw default allow outgoing
+    ufw allow "${SSH_PORT}/tcp"
+    ufw --force enable
+    touch "$VPSGUARD_INITIALIZED_MARKER"
+  fi
 
-  info "UFW enabled. Only SSH port is allowed by default."
-  ufw status verbose
+  if ufw status 2>/dev/null | grep -q "^Status: active"; then
+    info "UFW enabled. SSH port ${SSH_PORT}/tcp is allowed."
+  else
+    warn "UFW is not active. Please verify firewall status manually."
+  fi
+
+  ufw status verbose || true
 }
 
 configure_fail2ban() {
@@ -315,7 +347,7 @@ Please also check that /run/sshd exists and has correct permissions."
 
 final_check() {
   local server_ip
-  server_ip="$(curl -4 -s https://api.ipify.org || hostname -I | awk '{print $1}')"
+  server_ip="$(curl -4 --max-time 3 -fsS https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')"
 
   echo
   echo -e "${MAGENTA}${BOLD}============================================================${NC}"
@@ -342,13 +374,13 @@ final_check() {
   echo
   echo -e "  ${BOLD}ssh ${NEW_USER}@${server_ip} -p ${SSH_PORT}${NC}"
   echo
-  echo -e "${YELLOW}${BOLD}Then test sudo:${NC}"
+  echo -e "${YELLOW}${BOLD}Then test restricted sudo:${NC}"
   echo
-  echo -e "  ${BOLD}sudo whoami${NC}"
+  echo -e "  ${BOLD}sudo ufw status verbose${NC}"
   echo
   echo -e "${YELLOW}${BOLD}Expected output:${NC}"
   echo
-  echo -e "  ${GREEN}${BOLD}root${NC}"
+  echo -e "  ${GREEN}${BOLD}UFW status details or active rules${NC}"
   echo
   echo -e "${RED}${BOLD}IMPORTANT:${NC}"
   echo -e "${RED}${BOLD}Do NOT close this root session until the new ${NEW_USER} SSH login works.${NC}"

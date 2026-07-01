@@ -6,6 +6,7 @@ YELLOW="\033[33m"
 CYAN="\033[36m"
 BOLD="\033[1m"
 NC="\033[0m"
+NEW_USER="${NEW_USER:-alex}"
 
 info() {
   echo -e "${GREEN}[INFO]${NC} $1"
@@ -28,8 +29,8 @@ echo "Kernel: $(uname -r)"
 section "OS"
 grep -E "PRETTY_NAME|VERSION_ID|VERSION=" /etc/os-release || true
 
-section "User alex"
-id alex || warn "User alex does not exist."
+section "User ${NEW_USER}"
+id "${NEW_USER}" || warn "User ${NEW_USER} does not exist."
 
 section "Sudo group"
 getent group sudo || true

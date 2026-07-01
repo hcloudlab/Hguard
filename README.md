@@ -101,6 +101,38 @@ Replace `PASTE_YOUR_PUBLIC_KEY_HERE` with your real public key, not your private
 9. Select the same Termius private key.
 10. Test root key login before running VPSGuard.
 
+## SSH Key Setup for VPSGuard
+
+VPSGuard is a VPS bootstrap tool. It may grant elevated sudo access to the new user for automation purposes.
+
+Secure usage requires key-based login:
+
+- Generate an SSH key on your local machine.
+- Add the public key to `/root/.ssh/authorized_keys` before running VPSGuard.
+- Log in with the same private key after installation.
+
+### Windows PowerShell
+
+Generate a key pair:
+
+```powershell
+ssh-keygen -t ed25519 -C "vpsguard"
+```
+
+Show the public key:
+
+```powershell
+Get-Content $env:USERPROFILE\.ssh\id_ed25519.pub
+```
+
+Copy the public key to the VPS:
+
+```powershell
+type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh root@YOUR_SERVER_IP "mkdir -p /root/.ssh && cat >> /root/.ssh/authorized_keys"
+```
+
+If you prefer manual setup, log in as root and append the public key to `/root/.ssh/authorized_keys`, then run `chmod 600 /root/.ssh/authorized_keys`.
+
 ---
 
 # 运行 VPSGuard 前的 SSH 密钥准备
@@ -174,6 +206,38 @@ mkdir -p /root/.ssh && chmod 700 /root/.ssh && echo 'PASTE_YOUR_PUBLIC_KEY_HERE'
 9. 选择对应的 Termius 私钥。
 10. 确认 root 可以使用密钥登录后，再运行 VPSGuard。
 
+## VPSGuard 的 SSH 密钥准备
+
+VPSGuard 是一个 VPS 初始化工具。为了完成自动化操作，它可能会给新建用户配置较高的 sudo 权限。
+
+安全使用必须采用密钥登录：
+
+- 在本地电脑先生成 SSH 密钥。
+- 在运行 VPSGuard 之前，把公钥写入 `/root/.ssh/authorized_keys`。
+- 安装完成后，继续使用同一把私钥登录。
+
+### Windows PowerShell
+
+生成密钥对：
+
+```powershell
+ssh-keygen -t ed25519 -C "vpsguard"
+```
+
+查看公钥：
+
+```powershell
+Get-Content $env:USERPROFILE\.ssh\id_ed25519.pub
+```
+
+把公钥复制到 VPS：
+
+```powershell
+type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh root@YOUR_SERVER_IP "mkdir -p /root/.ssh && cat >> /root/.ssh/authorized_keys"
+```
+
+如果你想手动操作，可以先用 root 登录，然后把公钥追加到 `/root/.ssh/authorized_keys`，最后执行 `chmod 600 /root/.ssh/authorized_keys`。
+
 ---
 
 # One-click Deployment
@@ -228,17 +292,15 @@ For Termius after installation:
 - Do not use root login.
 - Do not use password login.
 
-Test sudo after logging in:
+Test restricted sudo after logging in:
 
 ```bash
-sudo whoami
+sudo ufw status verbose
 ```
 
 Expected output:
 
-```bash
-root
-```
+The UFW status output should be displayed without a password prompt.
 
 ---
 
@@ -258,17 +320,15 @@ Termius 安装后设置：
 - 不要使用 root 登录
 - 不要使用密码登录
 
-登录后测试 sudo：
+登录后测试受限 sudo：
 
 ```bash
-sudo whoami
+sudo ufw status verbose
 ```
 
 预期输出：
 
-```bash
-root
-```
+无需输入密码即可看到 UFW 状态输出。
 
 ---
 
