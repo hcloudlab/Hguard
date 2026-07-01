@@ -9,6 +9,7 @@ It is designed for a brand-new VPS after the first root login.
 - Checks Ubuntu LTS system compatibility
 - Updates system packages
 - Installs basic server tools
+- Enables BBR network acceleration by default when supported by the kernel
 - Creates a new sudo user: `alex` by default
 - Copies root SSH public keys to the new sudo user
 - Tests sudo permission
@@ -72,6 +73,7 @@ VPSGuard 设计为可以安全重复运行。
 - sudoers 规则会原地更新，不会叠加重复项。
 - 新用户可以免密执行 `sudo -i`。
 - 已初始化的 UFW 规则会保留。
+- 内核支持时会默认开启 BBR 加速。
 - 状态标记保存在 `/etc/vpsguard/`。
 
 ---
@@ -400,6 +402,13 @@ SSH_PORT=22 bash install.sh
 
 ```bash
 bash status.sh
+```
+
+Check BBR manually:
+
+```bash
+sysctl net.ipv4.tcp_congestion_control net.core.default_qdisc
+lsmod | grep bbr
 ```
 
 ## Uninstall

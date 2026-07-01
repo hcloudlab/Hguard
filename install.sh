@@ -167,6 +167,36 @@ upgrade_system() {
     openssh-server
 }
 
+enable_bbr() {
+  local sysctl_file="/etc/sysctl.d/99-bbr.conf"
+  local current_cc
+  local current_qdisc
+
+  info "Enabling BBR network acceleration..."
+
+  if ! modprobe tcp_bbr >/dev/null 2>&1; then
+    warn "tcp_bbr module could not be loaded. Kernel may not support BBR; continuing."
+    return 0
+  fi
+
+  cat > "$sysctl_file" <<'EOF'
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+EOF
+
+  sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1 || warn "Failed to apply net.core.default_qdisc=fq immediately."
+  sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1 || warn "Failed to apply net.ipv4.tcp_congestion_control=bbr immediately."
+
+  current_cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
+  current_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
+
+  if [ "$current_cc" = "bbr" ] && [ "$current_qdisc" = "fq" ]; then
+    info "BBR enabled: tcp_congestion_control=bbr, default_qdisc=fq"
+  else
+    warn "BBR was configured but is not fully active yet. Current: tcp_congestion_control=${current_cc:-unknown}, default_qdisc=${current_qdisc:-unknown}"
+  fi
+}
+
 create_user() {
   if id "$NEW_USER" >/dev/null 2>&1; then
     warn "User $NEW_USER already exists. Skipping user creation."
@@ -520,6 +550,7 @@ main() {
   phase_1_preflight_checks
   phase_2_config_loading
   phase_3_user_setup
+  enable_bbr
   phase_4_ssh_hardening
   phase_5_sudo_configuration
   phase_6_firewall_configuration

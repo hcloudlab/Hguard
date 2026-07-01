@@ -42,6 +42,22 @@ echo "Hostname: $(hostname)"
 echo "Uptime: $(uptime -p)"
 echo "Kernel: $(uname -r)"
 
+section "BBR"
+current_cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
+current_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
+echo "tcp_congestion_control: ${current_cc:-unknown}"
+echo "default_qdisc: ${current_qdisc:-unknown}"
+if [ "$current_cc" = "bbr" ] && [ "$current_qdisc" = "fq" ]; then
+  info "BBR is active"
+else
+  warn "BBR is not fully active"
+fi
+if lsmod 2>/dev/null | grep -q '^tcp_bbr'; then
+  info "tcp_bbr module is loaded"
+else
+  warn "tcp_bbr module is not loaded"
+fi
+
 section "VPSGuard config"
 echo "Config file: ${VPSGUARD_CONFIG_FILE}"
 echo "NEW_USER: ${NEW_USER}"
