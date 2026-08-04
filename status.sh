@@ -80,6 +80,16 @@ systemd_socket_listeners_from_text() {
   '
 }
 
+systemd_socket_listeners_for_state_from_text() {
+  local socket_state="$1"
+
+  if [ "$socket_state" != "active" ]; then
+    printf '%s\n' "$socket_state"
+    return 0
+  fi
+  systemd_socket_listeners_from_text
+}
+
 ssh_listener_present() {
   local port="$1"
   local output="$2"
@@ -245,12 +255,13 @@ main() {
   printf 'PubkeyAuthentication: %s\n' "$(sshd_value "$effective_sshd" pubkeyauthentication)"
   printf 'Managed SSH snippet: %s\n' "$([ -f "$VPSGUARD_SSHD_CONFIG" ] && printf present || printf missing)"
   printf 'Managed ssh.socket override: %s\n' "$([ -f "$VPSGUARD_SSH_SOCKET_OVERRIDE" ] && printf present || printf missing)"
-  if command -v systemctl >/dev/null 2>&1; then
+  effective_socket_listeners=""
+  if [ "$ssh_socket_state" = "active" ] && command -v systemctl >/dev/null 2>&1; then
     if ! effective_socket_listeners="$(systemctl show ssh.socket --property=Listen --value 2>/dev/null)"; then
       effective_socket_listeners=""
     fi
-    printf 'Effective ssh.socket listeners: %s\n' "$(printf '%s\n' "$effective_socket_listeners" | systemd_socket_listeners_from_text)"
   fi
+  printf 'Effective ssh.socket listeners: %s\n' "$(printf '%s\n' "$effective_socket_listeners" | systemd_socket_listeners_for_state_from_text "$ssh_socket_state")"
   printf 'Port finalization: %s\n' "$([ -f "$VPSGUARD_PENDING_PORT_MARKER" ] && printf pending || printf complete)"
   if sshd -t >/dev/null 2>&1; then
     printf 'sshd syntax: valid\n'
