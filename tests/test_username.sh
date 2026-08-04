@@ -48,7 +48,7 @@ getent() { printf 'existingadmin:x:1000:1000::/home/existingadmin:/bin/bash\n'; 
 assert_success ensure_managed_user
 assert_file_contains "$usermod_log" '-aG sudo existingadmin'
 
-if VPSGUARD_TEST_MODE=1 VPSGUARD_CONFIG_FILE="$temporary_root/missing-config" bash -c '. "$1"; resolve_managed_user' _ "$TEST_ROOT/install.sh" >/dev/null 2>&1; then
+if VPSGUARD_TEST_MODE=1 VPSGUARD_CONFIG_FILE="$temporary_root/missing-config" bash -c '. "$1"; resolve_managed_user' _ "$TEST_ROOT/install.sh" </dev/null >/dev/null 2>&1; then
   fail "non-interactive execution without NEW_USER must fail"
 fi
 
