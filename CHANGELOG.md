@@ -21,6 +21,7 @@ All notable changes to VPSGuard are documented here.
 - Keep invalid interactive username warnings out of the selected value so a valid retry is accepted.
 - Recreate `/run/sshd` after package upgrades before validating the hardened SSH configuration.
 - Validate Fail2ban configuration and wait for the `sshd` jail to become ready after restart.
+- Report deduplicated effective SSH and `ssh.socket` listeners instead of raw unit/drop-in directives.
 - Replace permanent phase-marker skips with actual-state reconciliation on every run.
 - Replace fixed success text with user, key, sudo, SSH, listener, UFW, fail2ban, and BBR acceptance checks.
 

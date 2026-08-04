@@ -67,7 +67,17 @@ sshd_value() {
 
 sshd_ports() {
   local output="$1"
-  printf '%s\n' "$output" | awk '$1 == "port" {ports = ports (ports ? "," : "") $2} END {print ports}'
+  printf '%s\n' "$output" | awk '$1 == "port" && !seen[$2]++ {ports = ports (ports ? "," : "") $2} END {print ports}'
+}
+
+systemd_socket_listeners_from_text() {
+  awk '
+    NF {
+      listener=$1
+      if (!seen[listener]++) values = values (values ? "," : "") listener
+    }
+    END {print values ? values : "none"}
+  '
 }
 
 ssh_listener_present() {
@@ -108,7 +118,7 @@ main() {
   local authorized_keys sudoers_file effective_sshd listeners available_cc current_cc current_qdisc key_owner
   local password_state sudo_policy
   local ssh_socket_state ssh_service_state sshd_service_state ufw_state="inactive"
-  local client_address host_context
+  local client_address host_context effective_socket_listeners
 
   if [ "$(id -u)" -ne 0 ]; then
     printf 'Please run status.sh as root so it can read protected VPSGuard state.\n' >&2
@@ -207,8 +217,10 @@ main() {
   printf 'Managed SSH snippet: %s\n' "$([ -f "$VPSGUARD_SSHD_CONFIG" ] && printf present || printf missing)"
   printf 'Managed ssh.socket override: %s\n' "$([ -f "$VPSGUARD_SSH_SOCKET_OVERRIDE" ] && printf present || printf missing)"
   if command -v systemctl >/dev/null 2>&1; then
-    printf 'Effective ssh.socket listeners: '
-    systemctl cat ssh.socket 2>/dev/null | awk -F= '$1 == "ListenStream" {values = values (values ? "," : "") $2} END {print values ? values : "none"}'
+    if ! effective_socket_listeners="$(systemctl show ssh.socket --property=Listen --value 2>/dev/null)"; then
+      effective_socket_listeners=""
+    fi
+    printf 'Effective ssh.socket listeners: %s\n' "$(printf '%s\n' "$effective_socket_listeners" | systemd_socket_listeners_from_text)"
   fi
   printf 'Port finalization: %s\n' "$([ -f "$VPSGUARD_PENDING_PORT_MARKER" ] && printf pending || printf complete)"
   if sshd -t >/dev/null 2>&1; then
