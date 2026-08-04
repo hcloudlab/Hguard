@@ -16,6 +16,7 @@ export VPSGUARD_STATE_DIR="$temporary_root/etc/vpsguard"
 require_root() { :; }
 check_ubuntu_lts() { :; }
 resolve_managed_user() { :; }
+resolve_sudo_mode() { SUDO_MODE=password; }
 resolve_ssh_ports() { :; }
 write_config_env() { :; }
 record_preinstall_state() { :; }
@@ -24,7 +25,6 @@ ensure_managed_user() { :; }
 configure_authorized_keys() { :; }
 configure_sudo() { :; }
 verify_sudo_configuration() { :; }
-confirm_sudo_password_authentication() { :; }
 configure_ufw_before_ssh() { :; }
 runtime_directory_seen=false
 configure_ssh_safely() {

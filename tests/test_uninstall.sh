@@ -43,11 +43,14 @@ if grep -Eq 'systemctl (stop|disable) fail2ban|ufw (--force )?(disable|reset)|us
 fi
 
 mkdir -p "$SUDOERS_DIR"
-sudoers_file="${SUDOERS_DIR}/90-vpsguard-existingadmin"
+sudoers_file="${SUDOERS_DIR}/vpsguard-existingadmin"
 printf '# Managed by VPSGuard 0.3.5\nexistingadmin ALL=(ALL:ALL) NOPASSWD: ALL\n' > "$sudoers_file"
 id() { printf 'existingadmin sudo\n'; }
+# Called indirectly by remove_passwordless_sudoers_safely.
+# shellcheck disable=SC2329
 passwd() { printf 'existingadmin P 2026-08-03 0 99999 7 -1\n'; }
 visudo() { return 0; }
+clear_cache_fail="false"
 sudo() {
   if [ "${1:-}" = "-l" ]; then
     printf 'User existingadmin may run the following commands:\n    (ALL : ALL) ALL\n'
@@ -56,10 +59,32 @@ sudo() {
   if [ "$*" = '-u existingadmin sudo -n true' ]; then
     return 1
   fi
+  if [ "$*" = '-u existingadmin sudo -k' ]; then
+    [ "$clear_cache_fail" != "true" ]
+    return
+  fi
   return 0
 }
-assert_success remove_legacy_sudoers_safely existingadmin
-[ ! -e "$sudoers_file" ] || fail "safe legacy passwordless sudo override was not removed"
+assert_success remove_passwordless_sudoers_safely existingadmin
+[ ! -e "$sudoers_file" ] || fail "safe passwordless sudo policy was not removed"
+
+printf '# Managed by VPSGuard 0.3.5\nexistingadmin ALL=(ALL:ALL) NOPASSWD: ALL\n' > "$sudoers_file"
+# Called indirectly by remove_passwordless_sudoers_safely.
+# shellcheck disable=SC2329
+passwd() { printf 'existingadmin L 2026-08-03 0 99999 7 -1\n'; }
+assert_failure remove_passwordless_sudoers_safely existingadmin
+[ -e "$sudoers_file" ] || fail "unsafe uninstall removed passwordless sudo without a valid password"
+
+passwd() { printf 'existingadmin P 2026-08-03 0 99999 7 -1\n'; }
+clear_cache_fail="true"
+assert_failure remove_passwordless_sudoers_safely existingadmin
+clear_cache_fail="false"
+[ -e "$sudoers_file" ] || fail "uninstall removed sudoers when cache invalidation failed"
+
+chmod 640 "$sudoers_file"
+printf '# Managed by another tool\nexistingadmin ALL=(ALL:ALL) NOPASSWD: ALL\n' > "$sudoers_file"
+assert_failure remove_passwordless_sudoers_safely existingadmin
+[ -e "$sudoers_file" ] || fail "uninstall removed an unrecognized sudoers file"
 
 mkdir -p "$(dirname "$SSHD_CONFIG")"
 printf '%s\n' \

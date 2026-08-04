@@ -113,10 +113,23 @@ sudo_policy_has_full_admin_from_text() {
   '
 }
 
+managed_file_is_owned() {
+  local file="$1"
+  [ -f "$file" ] && head -n 1 "$file" | grep -Eq '^# Managed by VPSGuard( |$)'
+}
+
+passwordless_sudo_effective_for_user() {
+  local user="$1"
+
+  sudo -u "$user" sudo -k >/dev/null 2>&1 || return 1
+  sudo -u "$user" sudo -n true >/dev/null 2>&1 || return 1
+  sudo -u "$user" sudo -n -i true >/dev/null 2>&1
+}
+
 main() {
-  local managed_user ssh_port original_port install_status user_entry user_home user_shell
+  local managed_user ssh_port original_port install_status sudo_mode user_entry user_home user_shell
   local authorized_keys sudoers_file effective_sshd listeners available_cc current_cc current_qdisc key_owner
-  local password_state sudo_policy
+  local password_state sudo_policy sudo_group_member="no" passwordless_effective="no"
   local ssh_socket_state ssh_service_state sshd_service_state ufw_state="inactive"
   local client_address host_context effective_socket_listeners
 
@@ -129,6 +142,11 @@ main() {
   if ! ssh_port="$(read_env_value "$VPSGUARD_CONFIG_FILE" SSH_PORT 2>/dev/null)"; then ssh_port=""; fi
   if ! original_port="$(read_env_value "$VPSGUARD_CONFIG_FILE" ORIGINAL_SSH_PORT 2>/dev/null)"; then original_port=""; fi
   if ! install_status="$(read_env_value "$VPSGUARD_CONFIG_FILE" INSTALL_STATUS 2>/dev/null)"; then install_status=""; fi
+  if ! sudo_mode="$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE 2>/dev/null)"; then sudo_mode="password"; fi
+  case "$sudo_mode" in
+    password|passwordless) ;;
+    *) sudo_mode="invalid" ;;
+  esac
 
   section "VPSGuard"
   printf 'Version: %s\n' "$VPSGUARD_VERSION"
@@ -143,7 +161,7 @@ main() {
     user_home="$(printf '%s\n' "$user_entry" | awk -F: '{print $6}')"
     user_shell="$(printf '%s\n' "$user_entry" | awk -F: '{print $7}')"
     authorized_keys="${user_home}/.ssh/authorized_keys"
-    sudoers_file="${SUDOERS_DIR}/90-vpsguard-${managed_user}"
+    sudoers_file="${SUDOERS_DIR}/vpsguard-${managed_user}"
     ok "User exists"
     printf 'Home: %s\nShell: %s\n' "$user_home" "$user_shell"
     if [ -s "$authorized_keys" ]; then
@@ -156,6 +174,7 @@ main() {
       warn "authorized_keys is missing or empty"
     fi
     if id -nG "$managed_user" 2>/dev/null | tr ' ' '\n' | grep -Fxq sudo; then
+      sudo_group_member="yes"
       ok "User is a member of the sudo group"
     else
       warn "User is not a member of the sudo group"
@@ -163,29 +182,39 @@ main() {
     if ! password_state="$(passwd -S "$managed_user" 2>/dev/null | awk '{print $2}')"; then
       password_state="unknown"
     fi
+    printf 'Sudo mode: %s\n' "$sudo_mode"
+    printf 'Password state: %s\n' "${password_state:-unknown}"
+    printf 'Sudo group membership: %s\n' "$sudo_group_member"
     if [ "$password_state" = "P" ]; then
       ok "A sudo authentication password is set"
     else
       warn "Password state is ${password_state:-unknown}; standard sudo may be unusable"
     fi
-    if [ -e "$sudoers_file" ]; then
-      warn "Legacy VPSGuard sudoers override is still present: ${sudoers_file}"
+    if managed_file_is_owned "$sudoers_file"; then
+      printf 'Managed sudoers file: present (%s)\n' "$sudoers_file"
+    elif [ -e "$sudoers_file" ]; then
+      printf 'Managed sudoers file: unrecognized (%s)\n' "$sudoers_file"
     else
-      ok "No VPSGuard full-passwordless sudo override is present"
+      printf 'Managed sudoers file: absent (%s)\n' "$sudoers_file"
+    fi
+    if [ -e "$sudoers_file" ] && visudo -cf "$sudoers_file" >/dev/null 2>&1; then
+      printf 'visudo validation: valid\n'
+    elif [ -e "$sudoers_file" ]; then
+      printf 'visudo validation: invalid\n'
+    elif visudo -c >/dev/null 2>&1; then
+      printf 'visudo validation: valid (global)\n'
+    else
+      printf 'visudo validation: invalid (global)\n'
     fi
     if visudo -c >/dev/null 2>&1 && sudo_policy="$(LC_ALL=C sudo -l -U "$managed_user" 2>/dev/null)" && printf '%s\n' "$sudo_policy" | sudo_policy_has_full_admin_from_text; then
       ok "Standard full sudo policy is available through the distribution sudo group"
     else
       warn "Standard full sudo policy could not be verified"
     fi
-    if ! sudo -u "$managed_user" sudo -k >/dev/null 2>&1; then
-      warn "Could not clear the sudo credential cache before the non-interactive check"
+    if passwordless_sudo_effective_for_user "$managed_user"; then
+      passwordless_effective="yes"
     fi
-    if sudo -u "$managed_user" sudo -n true >/dev/null 2>&1; then
-      warn "Unexpected passwordless sudo access is active"
-    else
-      ok "Non-interactive sudo is denied as expected; sudo -i requires the user password"
-    fi
+    printf 'Passwordless sudo effective: %s\n' "$passwordless_effective"
   else
     warn "Managed user does not exist"
   fi

@@ -8,8 +8,9 @@ VPSGuard 不安装第三方内核，不自动重启服务器，也不会在卸�
 
 - 安装时必须手动填写管理员用户名，不存在隐藏默认用户名
 - 复用已有普通用户时保留密码、home、现有公钥和用户文件
-- 使用发行版标准 `sudo` 组和用户密码提供完整管理员权限
-- 在 SSH 加固前验证公钥、sudo 策略、密码状态，并实际验证一次密码认证
+- 默认使用发行版标准 `sudo` 组和用户密码提供完整管理员权限
+- 可显式选择高风险的完整免密码 sudo，并通过独立受管 sudoers 文件实现
+- 在 SSH 加固前验证公钥、sudo 策略和所选模式的真实行为
 - 使用 `/etc/ssh/sshd_config.d/00-vpsguard.conf` 管理独立 SSH 配置
 - 在主配置首行加入可识别、可卸载的精确 Include，避免云镜像的前置 SSH 指令抢先生效
 - 在 `ssh.socket` 模式下管理独立 systemd socket drop-in，使 systemd 实际监听目标端口
@@ -87,19 +88,47 @@ bash <(wget -qO- https://raw.githubusercontent.com/hcloudlab/vpsguard/main/insta
 
 如果用户已存在，脚本会显示现状并要求确认；不会删除用户、重置密码或覆盖现有公钥，而是只合并缺失的公钥和配置。
 
-新建管理员时，VPSGuard 会要求为该账户设置一个强密码，并在修改 SSH 前要求输入一次该密码验证 sudo。SSH 本身仍只允许公钥登录；这个密码只用于登录后执行 `sudo`。
+随后会选择 sudo 模式：
+
+```text
+请选择管理员 sudo 模式：
+1. 密码 sudo（推荐）
+2. 免密码 sudo（高风险）
+```
+
+默认选择 `1`。密码模式会要求为该账户设置一个强密码，并在修改 SSH 前实际输入一次该密码验证 sudo。免密码模式必须阅读风险提示并精确输入 `I UNDERSTAND`，否则返回选择菜单。
+
+无论选择哪种 sudo 模式，SSH 都保持公钥登录：`PasswordAuthentication no`、`PermitRootLogin no`、`PubkeyAuthentication yes`。
 
 ## sudo 权限模型
 
-v0.3.5 使用标准管理员模型：
+两种模式都会把管理用户加入 Ubuntu 的 `sudo` 组。
 
-- 管理用户加入 Ubuntu 的 `sudo` 组；
-- 完整 sudo 通过用户密码认证；
-- 不创建 `NOPASSWD: ALL`；
-- 不提供受限免密命令；
-- `sudo -n` 应失败，`sudo -i` 会提示输入管理用户密码。
+### 密码 sudo（默认、推荐）
 
-从旧版重跑时，只有确认用户属于 `sudo` 组并已经设置密码后，才会移除 VPSGuard 可识别的旧全免密 sudoers 文件。未知 sudoers 文件不会被改写。
+- 通过 `passwd` 在可信终端设置 Linux 用户密码；
+- `passwd -S` 必须显示 `P`；
+- 不保留 VPSGuard 的 `NOPASSWD: ALL` 文件；
+- `sudo -n true` 必须失败；
+- SSH 加固前必须实际输入用户密码完成 `sudo -v` 验证。
+
+### 免密码 sudo（高风险可选项）
+
+VPSGuard 创建：
+
+```text
+/etc/sudoers.d/vpsguard-<username>
+```
+
+权限为 `root:root 440`，策略行为是：
+
+```text
+<username> ALL=(ALL:ALL) NOPASSWD: ALL
+```
+
+文件使用原子写入并通过 `visudo -cf` 校验；`sudo -n true` 和 `sudo -n -i true` 都必须成功。免密码 sudo 不等于空 Linux 密码：VPSGuard 不会删除密码，也不会主动创建空密码。新账户可以保持 locked 或 unset password；已有密码也会原样保留。
+
+此模式风险很高：任何获得该用户 SSH 私钥的人都可以立即取得 root 权限。SSH 密码登录仍始终关闭，但这不能缓解私钥泄露导致的直接 root 权限泄露。
 
 ## 参数化安装
 
@@ -117,7 +146,7 @@ sudo -E env NEW_USER=myadmin bash /tmp/vpsguard-install.sh
 sudo -E env NEW_USER=myadmin SSH_PORT=2222 bash /tmp/vpsguard-install.sh
 ```
 
-`NEW_USER` 和 `SSH_PORT` 可以通过参数提供，但 sudo 密码设置及首次认证必须通过可信终端完成。没有 TTY 时：
+`NEW_USER` 和 `SSH_PORT` 可以通过参数提供。首次安装没有 TTY 时使用安全默认值 `password`；已配置的非交互重跑保持当前模式。密码设置及首次认证仍必须通过可信终端完成：
 
 - 不会创建一个无密码的新管理员；
 - 新用户应先由管理员通过控制台创建、加入 `sudo` 组并设置密码；
@@ -145,6 +174,17 @@ sudo -E env NEW_USER=myadmin SSH_PORT=2222 bash /tmp/vpsguard-install.sh
 
 更换管理用户不会删除旧用户或旧用户数据。新用户必须完成公钥和 sudo 验证后，SSH 加固才会继续。
 
+重跑还会显示当前 sudo 模式并提供：
+
+```text
+1. 保持当前模式
+2. 切换为密码 sudo
+3. 切换为免密码 sudo
+4. 取消
+```
+
+`passwordless` 切换到 `password` 时，VPSGuard 会先设置或确认有效密码和标准 sudo 策略，再事务性移除受管 NOPASSWD 文件、实际验证密码 sudo，并确认 `sudo -n true` 失败；失败会恢复原 sudoers 文件。反向切换会先创建和验证受管文件，不删除已有用户密码。未知 sudoers 文件不会被修改。
+
 ## SSH 端口切换安全门禁
 
 当目标端口与旧端口不同，VPSGuard 会：
@@ -164,7 +204,7 @@ ssh -p 2222 myadmin@SERVER_IP
 sudo -i
 ```
 
-`sudo -i` 应提示输入 `myadmin` 的用户密码。`sudo -n -i` 成功反而表示系统仍存在其他免密 sudo 规则，应先调查。
+密码模式下，`sudo -i` 应提示输入 `myadmin` 的用户密码，`sudo -n true` 应失败。免密码模式下，`sudo -n true` 和 `sudo -n -i true` 应成功。
 
 如果没有输入 `YES`，安装状态会成为：
 
@@ -218,7 +258,9 @@ sudo bash status.sh
 状态脚本会显示：
 
 - VPSGuard 版本、配置和安装状态
-- 管理用户、home、shell、sudo 组、密码状态、sudo 策略和公钥权限状态
+- 管理用户、home、shell、公钥权限状态
+- `Sudo mode`、`Password state`、`Sudo group membership`
+- `Managed sudoers file`、`visudo validation`、`Passwordless sudo effective`
 - SSH 期望端口、有效端口、实际监听和 systemd unit 状态
 - root/password/public-key 登录最终有效值
 - UFW 新旧端口规则
@@ -242,6 +284,7 @@ VPSGuard 首次修改系统前会记录：
 /etc/ssh/sshd_config.d/00-vpsguard.conf
 /etc/systemd/system/ssh.socket.d/00-vpsguard.conf  # 仅 ssh.socket 模式
 /etc/fail2ban/jail.d/vpsguard-sshd.local
+/etc/sudoers.d/vpsguard-<username>               # 仅免密码 sudo 模式
 /etc/sysctl.d/99-vpsguard-bbr.conf
 /etc/modules-load.d/vpsguard-bbr.conf
 ```
@@ -266,7 +309,9 @@ UNINSTALL
 - 不执行全局 `ufw disable` 或 `ufw reset`
 - 不停止或禁用整套 fail2ban
 - 只删除可识别的 VPSGuard 管理文件
-- 安全移除可识别的旧 VPSGuard 全免密 sudoers 文件；无法证明标准 sudo 可用时会恢复并保留
+- 密码模式不额外处理 sudoers
+- 免密码模式只有在有效用户密码、sudo 组标准权限和删除后的行为检查都证明安全时，才删除带 VPSGuard 管理标记的 sudoers 文件
+- 无法证明安全时保留免密码 sudoers 文件并报告 partial uninstall；未知 sudoers 文件始终保留
 - 只考虑删除记录过的 UFW 规则，并始终保留当前 SSH 端口规则
 - SSH 端口已改变或仍待确认时，保留 SSH 片段和状态，避免远程失联
 - 删除 BBR 持久化文件时不强制切换拥塞算法、不重启 VPS

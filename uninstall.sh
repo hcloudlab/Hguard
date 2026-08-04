@@ -56,7 +56,7 @@ read_env_value() {
 
 managed_file_is_owned() {
   local file="$1"
-  [ -f "$file" ] && head -n 1 "$file" | grep -Fq 'Managed by VPSGuard'
+  [ -f "$file" ] && head -n 1 "$file" | grep -Eq '^# Managed by VPSGuard( |$)'
 }
 
 ufw_rule_exists_from_text() {
@@ -235,40 +235,50 @@ sudo_policy_has_full_admin_from_text() {
   '
 }
 
-remove_legacy_sudoers_safely() {
+remove_passwordless_sudoers_safely() {
   local managed_user="$1"
   local sudoers_file backup password_state policy_output
 
-  sudoers_file="${SUDOERS_DIR}/90-vpsguard-${managed_user}"
+  sudoers_file="${SUDOERS_DIR}/vpsguard-${managed_user}"
   [ -e "$sudoers_file" ] || return 0
   if ! managed_file_is_owned "$sudoers_file"; then
     warn "Preserved unrecognized sudoers file: ${sudoers_file}"
     return 1
   fi
   if ! id -nG "$managed_user" 2>/dev/null | tr ' ' '\n' | grep -Fxq sudo; then
-    warn "Preserved legacy sudoers override because ${managed_user} is not in the sudo group."
+    warn "Preserved passwordless sudoers file because ${managed_user} is not in the sudo group."
     return 1
   fi
   if ! password_state="$(passwd -S "$managed_user" 2>/dev/null | awk '{print $2}')"; then
     password_state="unknown"
   fi
   if [ "$password_state" != "P" ]; then
-    warn "Preserved legacy sudoers override because ${managed_user} has no usable sudo password."
+    warn "Preserved passwordless sudoers file because ${managed_user} has no usable sudo password."
     return 1
   fi
 
-  backup="$(mktemp "${sudoers_file}.uninstall.XXXXXX")"
-  cp "$sudoers_file" "$backup"
-  rm -f "$sudoers_file"
+  if ! backup="$(mktemp "${sudoers_file}.uninstall.XXXXXX")" \
+    || ! cp -p "$sudoers_file" "$backup"; then
+    [ -z "${backup:-}" ] || rm -f "$backup"
+    warn "Could not create a sudoers rollback copy; preserved ${sudoers_file}."
+    return 1
+  fi
+  if ! rm -f "$sudoers_file"; then
+    mv -f "$backup" "$sudoers_file"
+    warn "Could not stage removal of ${sudoers_file}; the rollback copy was restored."
+    return 1
+  fi
   if visudo -c >/dev/null 2>&1 \
     && policy_output="$(LC_ALL=C sudo -l -U "$managed_user" 2>/dev/null)" \
     && printf '%s\n' "$policy_output" | sudo_policy_has_full_admin_from_text; then
     if ! sudo -u "$managed_user" sudo -k >/dev/null 2>&1; then
-      warn "Could not clear the sudo credential cache while removing the legacy override."
+      mv -f "$backup" "$sudoers_file"
+      warn "Could not clear the sudo credential cache; restored ${sudoers_file}."
+      return 1
     fi
     if ! sudo -u "$managed_user" sudo -n true >/dev/null 2>&1; then
       rm -f "$backup"
-      info "Removed legacy VPSGuard passwordless sudo override; standard password-authenticated sudo remains available."
+      info "Removed the VPSGuard passwordless sudo policy; standard password-authenticated sudo remains available."
       return 0
     fi
   fi
@@ -279,14 +289,19 @@ remove_legacy_sudoers_safely() {
 }
 
 main() {
-  local managed_user target_port original_port confirmation ssh_removed="true"
+  local managed_user target_port original_port sudo_mode confirmation ssh_removed="true"
   local leftovers="false"
 
   [ "$(id -u)" -eq 0 ] || error "Please run uninstall.sh as root."
   if ! managed_user="$(read_env_value "$VPSGUARD_CONFIG_FILE" NEW_USER 2>/dev/null)"; then managed_user=""; fi
   if ! target_port="$(read_env_value "$VPSGUARD_CONFIG_FILE" SSH_PORT 2>/dev/null)"; then target_port=""; fi
   if ! original_port="$(read_env_value "$VPSGUARD_CONFIG_FILE" ORIGINAL_SSH_PORT 2>/dev/null)"; then original_port=""; fi
+  if ! sudo_mode="$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE 2>/dev/null)"; then sudo_mode="password"; fi
   [ -n "$managed_user" ] || error "VPSGuard config is missing or invalid; refusing an untracked uninstall."
+  case "$sudo_mode" in
+    password|passwordless) ;;
+    *) error "VPSGuard config contains an invalid SUDO_MODE; refusing an untracked sudoers change." ;;
+  esac
 
   printf '\n%bVPSGuard %s safe uninstall%b\n' "$BOLD" "$VPSGUARD_VERSION" "$NC"
   warn "The administrator account, home directory and authorized_keys will NOT be deleted."
@@ -306,8 +321,10 @@ main() {
   remove_owned_file "$BBR_MODULES_FILE"
   warn "Current kernel congestion-control state was not forced to another algorithm and no reboot was performed."
 
-  if ! remove_legacy_sudoers_safely "$managed_user"; then
-    leftovers="true"
+  if [ "$sudo_mode" = "passwordless" ]; then
+    if ! remove_passwordless_sudoers_safely "$managed_user"; then
+      leftovers="true"
+    fi
   fi
   info "Administrator account ${managed_user} and all user files were preserved."
 
@@ -320,7 +337,7 @@ main() {
     fi
     info "Safe uninstall completed."
   else
-    warn "Uninstall completed partially. State was retained because SSH safety prevented full removal."
+    warn "Uninstall completed partially. State was retained because SSH or sudo safety prevented full removal."
   fi
 }
 

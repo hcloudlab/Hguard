@@ -20,4 +20,23 @@ actual_listeners="$(printf '%s\n' "$effective_socket_listeners" | systemd_socket
 assert_equal '0.0.0.0:2222,[::]:2222' "$actual_listeners" "effective systemd socket listeners"
 assert_equal none "$(printf '' | systemd_socket_listeners_from_text)" "empty systemd socket listeners"
 
-pass "status reports deduplicated effective SSH and systemd socket listeners"
+passwordless_behavior="true"
+sudo() {
+  case "$*" in
+    '-u statusadmin sudo -k') return 0 ;;
+    '-u statusadmin sudo -n true'|'-u statusadmin sudo -n -i true') [ "$passwordless_behavior" = "true" ] ;;
+    *) return 1 ;;
+  esac
+}
+assert_success passwordless_sudo_effective_for_user statusadmin
+passwordless_behavior="false"
+assert_failure passwordless_sudo_effective_for_user statusadmin
+
+assert_file_contains "$TEST_ROOT/status.sh" 'Sudo mode: %s'
+assert_file_contains "$TEST_ROOT/status.sh" 'Password state: %s'
+assert_file_contains "$TEST_ROOT/status.sh" 'Sudo group membership: %s'
+assert_file_contains "$TEST_ROOT/status.sh" 'Managed sudoers file: present'
+assert_file_contains "$TEST_ROOT/status.sh" 'visudo validation: valid'
+assert_file_contains "$TEST_ROOT/status.sh" 'Passwordless sudo effective: %s'
+
+pass "status reports SSH listeners and behavior-based sudo mode details"

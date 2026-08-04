@@ -19,6 +19,7 @@ export BBR_MODULE_PERSISTENCE_REQUIRED=true
 . "$TEST_ROOT/install.sh"
 
 NEW_USER='repeatadmin'
+SUDO_MODE='password'
 SSH_PORT=2222
 ORIGINAL_SSH_PORT=22
 INSTALL_STATUS='pending-port-finalization'
@@ -28,6 +29,7 @@ write_vpsguard_sshd_config true
 write_bbr_files
 record_managed_rule '2222/tcp'
 first="$(cksum "$VPSGUARD_CONFIG_FILE" "$VPSGUARD_SSHD_CONFIG" "$BBR_SYSCTL_FILE" "$BBR_MODULES_FILE" "$VPSGUARD_MANAGED_RULES")"
+assert_equal password "$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE)" "persisted sudo mode"
 
 for _iteration in {1..10}; do
   write_config_env

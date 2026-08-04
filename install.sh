@@ -31,6 +31,7 @@ REQUESTED_NEW_USER="${NEW_USER:-}"
 REQUESTED_SSH_PORT="${SSH_PORT:-}"
 NEW_USER=""
 PREVIOUS_MANAGED_USER=""
+SUDO_MODE=""
 SSH_PORT=""
 ORIGINAL_SSH_PORT=""
 PORT_MIGRATION_REQUIRED="false"
@@ -143,6 +144,7 @@ write_config_env() {
 
   content="# Managed by VPSGuard ${VPSGUARD_VERSION}; values are validated before use.
 NEW_USER='${NEW_USER}'
+SUDO_MODE='${SUDO_MODE}'
 SSH_PORT='${SSH_PORT}'
 ORIGINAL_SSH_PORT='${ORIGINAL_SSH_PORT}'
 INSTALL_STATUS='${INSTALL_STATUS}'
@@ -328,6 +330,100 @@ resolve_managed_user() {
   fi
 }
 
+validate_sudo_mode() {
+  case "${1:-}" in
+    password|passwordless) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+confirm_passwordless_sudo_risk() {
+  local confirmation
+
+  printf '%s\n' '免密码 sudo 意味着任何获得该用户 SSH 私钥的人都可以立即取得 root 权限。' >&2
+  read -r -p "请输入 I UNDERSTAND 继续：" confirmation
+  [ "$confirmation" = "I UNDERSTAND" ]
+}
+
+prompt_initial_sudo_mode() {
+  local selection
+
+  while true; do
+    printf '%s\n' '请选择管理员 sudo 模式：' >&2
+    printf '%s\n' '1. 密码 sudo（推荐）' '2. 免密码 sudo（高风险）' >&2
+    read -r -p "请选择 [1]：" selection
+    case "${selection:-1}" in
+      1) printf 'password\n'; return 0 ;;
+      2)
+        if confirm_passwordless_sudo_risk; then
+          printf 'passwordless\n'
+          return 0
+        fi
+        warn "未输入精确确认；未启用免密码 sudo。" >&2
+        ;;
+      *) warn "无效选择，请重新选择。" >&2 ;;
+    esac
+  done
+}
+
+prompt_rerun_sudo_mode() {
+  local current_mode="$1"
+  local selection
+
+  while true; do
+    printf '当前 sudo 模式：%s\n' "$current_mode" >&2
+    printf '%s\n' \
+      '1. 保持当前模式' \
+      '2. 切换为密码 sudo' \
+      '3. 切换为免密码 sudo' \
+      '4. 取消' >&2
+    read -r -p "请选择 [1]：" selection
+    case "${selection:-1}" in
+      1) printf '%s\n' "$current_mode"; return 0 ;;
+      2) printf 'password\n'; return 0 ;;
+      3)
+        if confirm_passwordless_sudo_risk; then
+          printf 'passwordless\n'
+          return 0
+        fi
+        warn "未输入精确确认；未启用免密码 sudo。" >&2
+        ;;
+      4) return 2 ;;
+      *) warn "无效选择，请重新选择。" >&2 ;;
+    esac
+  done
+}
+
+resolve_sudo_mode() {
+  local configured_mode=""
+  local selected_mode
+
+  if [ -f "$VPSGUARD_CONFIG_FILE" ]; then
+    if configured_mode="$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE 2>/dev/null)"; then
+      validate_sudo_mode "$configured_mode" || error "Configured SUDO_MODE is invalid. Repair ${VPSGUARD_CONFIG_FILE}."
+    else
+      configured_mode="password"
+      info "Existing configuration has no SUDO_MODE; using the safe password default."
+    fi
+    if [ -t 0 ]; then
+      if ! selected_mode="$(prompt_rerun_sudo_mode "$configured_mode")"; then
+        error "Installation cancelled."
+      fi
+      SUDO_MODE="$selected_mode"
+    else
+      SUDO_MODE="$configured_mode"
+    fi
+  elif [ -t 0 ]; then
+    SUDO_MODE="$(prompt_initial_sudo_mode)"
+  else
+    SUDO_MODE="password"
+    info "No interactive terminal; using the default password sudo mode."
+  fi
+
+  validate_sudo_mode "$SUDO_MODE" || error "Resolved sudo mode is invalid."
+  info "Selected sudo mode: ${SUDO_MODE}."
+}
+
 validate_ssh_port() {
   local port="${1:-}"
   [[ "$port" =~ ^[0-9]+$ ]] || return 1
@@ -421,7 +517,7 @@ ensure_managed_user() {
   if id "$NEW_USER" >/dev/null 2>&1; then
     info "Reconciling existing user ${NEW_USER}."
   else
-    [ -t 0 ] || error "Creating a new administrator requires a trusted interactive terminal so a sudo password can be set and validated. VPSGuard does not accept passwords through automation variables."
+    [ -t 0 ] || error "Creating a new administrator requires a trusted interactive terminal. VPSGuard does not accept sudo risk confirmation or passwords through automation variables."
     info "Creating administrator user ${NEW_USER}."
     adduser --disabled-password --gecos "" "$NEW_USER"
   fi
@@ -469,7 +565,16 @@ configure_authorized_keys() {
 }
 
 sudoers_file_for_user() {
+  printf '%s/vpsguard-%s\n' "$SUDOERS_DIR" "$NEW_USER"
+}
+
+legacy_sudoers_file_for_user() {
   printf '%s/90-vpsguard-%s\n' "$SUDOERS_DIR" "$NEW_USER"
+}
+
+managed_file_is_owned() {
+  local file="$1"
+  [ -f "$file" ] && head -n 1 "$file" | grep -Eq '^# Managed by VPSGuard( |$)'
 }
 
 user_in_sudo_group() {
@@ -492,72 +597,217 @@ sudo_policy_has_full_admin_from_text() {
   '
 }
 
+standard_sudo_policy_available() {
+  local policy_output
+
+  if ! policy_output="$(LC_ALL=C sudo -l -U "$NEW_USER" 2>/dev/null)"; then
+    return 1
+  fi
+  printf '%s\n' "$policy_output" | sudo_policy_has_full_admin_from_text
+}
+
+clear_user_sudo_cache() {
+  sudo -u "$NEW_USER" sudo -k >/dev/null 2>&1
+}
+
+passwordless_sudo_effective() {
+  clear_user_sudo_cache || return 1
+  sudo -u "$NEW_USER" sudo -n true >/dev/null 2>&1 || return 1
+  sudo -u "$NEW_USER" sudo -n -i true >/dev/null 2>&1
+}
+
+passwordless_sudo_denied() {
+  clear_user_sudo_cache || return 1
+  ! sudo -u "$NEW_USER" sudo -n true >/dev/null 2>&1
+}
+
+sudoers_file_mode() {
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null
+}
+
+validate_passwordless_sudoers_file() {
+  local sudoers_file="$1"
+  local expected_line
+
+  expected_line="${NEW_USER} ALL=(ALL:ALL) NOPASSWD: ALL"
+  managed_file_is_owned "$sudoers_file" || return 1
+  [ "$(sudoers_file_mode "$sudoers_file")" = "440" ] || return 1
+  [ "$(grep -Fxc "$expected_line" "$sudoers_file")" -eq 1 ] || return 1
+  if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+    [ "$(stat -c '%U:%G' "$sudoers_file" 2>/dev/null)" = "root:root" ] || return 1
+  fi
+  visudo -cf "$sudoers_file" >/dev/null 2>&1
+}
+
 ensure_sudo_password() {
   if user_password_is_set; then
     info "Administrator ${NEW_USER} has a password for standard sudo authentication."
     return 0
   fi
 
-  [ -t 0 ] || error "Administrator ${NEW_USER} has no usable password. Set one with 'passwd ${NEW_USER}' from a trusted console, then rerun VPSGuard."
+  if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+    [ -t 0 ] || error "Administrator ${NEW_USER} has no usable password. Set one with 'passwd ${NEW_USER}' from a trusted console, then rerun VPSGuard."
+  fi
   warn "VPSGuard uses standard password-authenticated sudo. Set a strong password for ${NEW_USER}; it is not used for SSH login."
   passwd "$NEW_USER" || error "Could not set the sudo password for ${NEW_USER}."
   user_password_is_set || error "Password state for ${NEW_USER} is still locked or unavailable."
 }
 
-remove_vpsguard_passwordless_override() {
-  local sudoers_file legacy_file
+confirm_sudo_password_authentication() {
+  if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+    [ -t 0 ] || return 1
+    info "Enter the password for ${NEW_USER} once to validate 'sudo -i' authentication before SSH is changed."
+  fi
+  clear_user_sudo_cache || return 1
+  sudo -u "$NEW_USER" sudo -v || return 1
+  clear_user_sudo_cache
+}
+
+restore_sudoers_backup() {
+  local backup="$1"
+  local destination="$2"
+
+  if [ -n "$backup" ] && [ -e "$backup" ]; then
+    mv -f "$backup" "$destination"
+  else
+    rm -f "$destination"
+  fi
+}
+
+configure_passwordless_sudo() {
+  local sudoers_file backup=""
+  local content
 
   sudoers_file="$(sudoers_file_for_user)"
+  if [ -e "$sudoers_file" ] && ! managed_file_is_owned "$sudoers_file"; then
+    warn "Refusing to overwrite an unrecognized sudoers file: ${sudoers_file}"
+    return 1
+  fi
   if [ -e "$sudoers_file" ]; then
-    if head -n 1 "$sudoers_file" | grep -Fq 'Managed by VPSGuard'; then
-      rm -f "$sudoers_file"
-      info "Removed the legacy VPSGuard full passwordless sudo override."
-    else
-      error "Refusing to replace an unrecognized sudoers file: ${sudoers_file}"
+    if ! backup="$(mktemp "${sudoers_file}.backup.XXXXXX")" \
+      || ! cp -p "$sudoers_file" "$backup"; then
+      [ -z "$backup" ] || rm -f "$backup"
+      warn "Could not create a sudoers rollback copy."
+      return 1
     fi
   fi
 
-  legacy_file="${SUDOERS_DIR}/90-${NEW_USER}"
-  if [ -f "$legacy_file" ] && grep -Fxq "${NEW_USER} ALL=(ALL) NOPASSWD: ALL" "$legacy_file"; then
-    rm -f "$legacy_file"
-    info "Removed the recognized legacy passwordless sudo entry ${legacy_file}."
+  content="# Managed by VPSGuard ${VPSGUARD_VERSION}; passwordless sudo mode.
+${NEW_USER} ALL=(ALL:ALL) NOPASSWD: ALL
+"
+  if ! atomic_write "$sudoers_file" 440 "$content"; then
+    restore_sudoers_backup "$backup" "$sudoers_file"
+    warn "Could not atomically write ${sudoers_file}; the previous state was restored."
+    return 1
   fi
+  if validate_passwordless_sudoers_file "$sudoers_file" \
+    && visudo -c >/dev/null 2>&1 \
+    && passwordless_sudo_effective; then
+    [ -z "$backup" ] || rm -f "$backup"
+    info "Full passwordless sudo is configured in ${sudoers_file}."
+    return 0
+  fi
+
+  restore_sudoers_backup "$backup" "$sudoers_file"
+  visudo -c >/dev/null 2>&1 || warn "The previous sudoers state was restored, but global validation still fails."
+  warn "Passwordless sudo validation failed; the previous sudoers state was restored."
+  return 1
+}
+
+configure_password_sudo() {
+  local sudoers_file legacy_file backup="" legacy_backup=""
+
+  sudoers_file="$(sudoers_file_for_user)"
+  legacy_file="$(legacy_sudoers_file_for_user)"
+  if [ -e "$sudoers_file" ] && ! managed_file_is_owned "$sudoers_file"; then
+    warn "Refusing to remove an unrecognized sudoers file: ${sudoers_file}"
+    return 1
+  fi
+  if [ -e "$legacy_file" ] && ! managed_file_is_owned "$legacy_file"; then
+    warn "Refusing to remove an unrecognized legacy sudoers file: ${legacy_file}"
+    return 1
+  fi
+
+  ensure_sudo_password
+  user_in_sudo_group || return 1
+  visudo -c >/dev/null 2>&1 || return 1
+  standard_sudo_policy_available || return 1
+
+  if [ -e "$sudoers_file" ]; then
+    if ! backup="$(mktemp "${sudoers_file}.backup.XXXXXX")" \
+      || ! cp -p "$sudoers_file" "$backup"; then
+      [ -z "$backup" ] || rm -f "$backup"
+      warn "Could not back up ${sudoers_file}; no sudoers file was changed."
+      return 1
+    fi
+  fi
+  if [ -e "$legacy_file" ]; then
+    if ! legacy_backup="$(mktemp "${legacy_file}.backup.XXXXXX")" \
+      || ! cp -p "$legacy_file" "$legacy_backup"; then
+      [ -z "$legacy_backup" ] || rm -f "$legacy_backup"
+      [ -z "$backup" ] || rm -f "$backup"
+      warn "Could not back up ${legacy_file}; no sudoers file was changed."
+      return 1
+    fi
+  fi
+  if ! rm -f "$sudoers_file" "$legacy_file"; then
+    restore_sudoers_backup "$backup" "$sudoers_file"
+    restore_sudoers_backup "$legacy_backup" "$legacy_file"
+    warn "Could not stage password sudo safely; the previous sudoers state was restored."
+    return 1
+  fi
+
+  if visudo -c >/dev/null 2>&1 \
+    && confirm_sudo_password_authentication \
+    && passwordless_sudo_denied; then
+    [ -z "$backup" ] || rm -f "$backup"
+    [ -z "$legacy_backup" ] || rm -f "$legacy_backup"
+    info "Standard password-authenticated sudo is configured for ${NEW_USER}."
+    return 0
+  fi
+
+  restore_sudoers_backup "$backup" "$sudoers_file"
+  restore_sudoers_backup "$legacy_backup" "$legacy_file"
+  visudo -c >/dev/null 2>&1 || warn "The previous sudoers state was restored, but global validation still fails."
+  warn "Password sudo validation failed; the previous sudoers state was restored."
+  return 1
 }
 
 configure_sudo() {
   user_in_sudo_group || error "Administrator ${NEW_USER} is not a member of the sudo group."
-  ensure_sudo_password
-  remove_vpsguard_passwordless_override
-  visudo -c >/dev/null || error "Global sudoers validation failed."
-  info "Standard password-authenticated sudo policy is configured for ${NEW_USER}."
+  case "$SUDO_MODE" in
+    password) configure_password_sudo || error "Could not safely configure password sudo." ;;
+    passwordless) configure_passwordless_sudo || error "Could not safely configure passwordless sudo." ;;
+    *) error "Unsupported sudo mode: ${SUDO_MODE}" ;;
+  esac
 }
 
-verify_sudo_configuration() {
-  local sudoers_file policy_output
-
-  sudoers_file="$(sudoers_file_for_user)"
-  [ ! -e "$sudoers_file" ] || return 1
+verify_password_sudo_configuration() {
+  [ ! -e "$(sudoers_file_for_user)" ] || return 1
+  [ ! -e "$(legacy_sudoers_file_for_user)" ] || return 1
   user_in_sudo_group || return 1
   user_password_is_set || return 1
   visudo -c >/dev/null 2>&1 || return 1
-  if ! policy_output="$(LC_ALL=C sudo -l -U "$NEW_USER" 2>/dev/null)"; then
-    return 1
-  fi
-  printf '%s\n' "$policy_output" | sudo_policy_has_full_admin_from_text || return 1
-  sudo -u "$NEW_USER" sudo -k >/dev/null 2>&1 || return 1
-  if sudo -u "$NEW_USER" sudo -n true >/dev/null 2>&1; then
-    return 1
-  fi
+  standard_sudo_policy_available || return 1
+  passwordless_sudo_denied
 }
 
-confirm_sudo_password_authentication() {
-  if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
-    [ -t 0 ] || error "A terminal is required to validate the administrator's sudo password before SSH hardening."
-    info "Enter the password for ${NEW_USER} once to validate 'sudo -i' authentication before SSH is changed."
-  fi
-  sudo -u "$NEW_USER" sudo -k >/dev/null 2>&1 || error "Could not invalidate the sudo credential cache for ${NEW_USER}."
-  sudo -u "$NEW_USER" sudo -v || error "Password-authenticated sudo validation failed for ${NEW_USER}."
-  sudo -u "$NEW_USER" sudo -k >/dev/null 2>&1 || error "Could not clear the sudo credential cache after validation."
+verify_passwordless_sudo_configuration() {
+  local sudoers_file
+
+  sudoers_file="$(sudoers_file_for_user)"
+  user_in_sudo_group || return 1
+  validate_passwordless_sudoers_file "$sudoers_file" || return 1
+  visudo -c >/dev/null 2>&1 || return 1
+  passwordless_sudo_effective
+}
+
+verify_sudo_configuration() {
+  case "$SUDO_MODE" in
+    password) verify_password_sudo_configuration ;;
+    passwordless) verify_passwordless_sudo_configuration ;;
+    *) return 1 ;;
+  esac
 }
 
 ufw_rule_exists_from_text() {
@@ -1112,6 +1362,7 @@ print_final_summary() {
   printf '\n%bVPSGuard %s acceptance completed%b\n' "$BOLD" "$VPSGUARD_VERSION" "$NC"
   printf 'Install status: %s\n' "$INSTALL_STATUS"
   printf 'Managed user: %s\n' "$NEW_USER"
+  printf 'Sudo mode: %s\n' "$SUDO_MODE"
   printf 'Target SSH port: %s\n' "$SSH_PORT"
   printf 'SSH runtime mode: %s\n' "$SSH_RUNTIME_MODE"
   printf 'BBR status: %s\n' "$BBR_STATUS"
@@ -1132,6 +1383,7 @@ main() {
   ensure_directory "$VPSGUARD_STATE_DIR" 700
   prepare_sshd_runtime_directory
   resolve_managed_user
+  resolve_sudo_mode
   resolve_ssh_ports
   INSTALL_STATUS="failed"
   write_config_env
@@ -1145,7 +1397,6 @@ main() {
   configure_authorized_keys
   configure_sudo
   verify_sudo_configuration || error "Sudo validation failed. SSH hardening was not started."
-  confirm_sudo_password_authentication
 
   configure_ufw_before_ssh
   configure_ssh_safely

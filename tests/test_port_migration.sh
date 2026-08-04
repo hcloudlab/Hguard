@@ -28,6 +28,7 @@ resolve_port_migration_requirement 2222
 assert_equal false "$PORT_MIGRATION_REQUIRED" "finalized rerun must not recreate migration"
 
 NEW_USER='repeatadmin'
+SUDO_MODE='password'
 INSTALL_STATUS='failed'
 write_config_env
 SSH_CONNECTION='192.0.2.10 50000 192.0.2.20 2222'
