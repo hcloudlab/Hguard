@@ -1096,6 +1096,9 @@ main() {
   write_config_env
   record_preinstall_state
   upgrade_system
+  # An OpenSSH package upgrade can remove /run/sshd while restarting the
+  # socket-activated service. Recreate it before any post-upgrade sshd check.
+  prepare_sshd_runtime_directory
 
   ensure_managed_user
   configure_authorized_keys
