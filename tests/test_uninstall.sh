@@ -47,7 +47,7 @@ sudoers_file="${SUDOERS_DIR}/vpsguard-existingadmin"
 printf '# Managed by VPSGuard 0.3.5\nexistingadmin ALL=(ALL:ALL) NOPASSWD: ALL\n' > "$sudoers_file"
 id() { printf 'existingadmin sudo\n'; }
 # Called indirectly by remove_passwordless_sudoers_safely.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 passwd() { printf 'existingadmin P 2026-08-03 0 99999 7 -1\n'; }
 visudo() { return 0; }
 clear_cache_fail="false"
@@ -70,7 +70,7 @@ assert_success remove_passwordless_sudoers_safely existingadmin
 
 printf '# Managed by VPSGuard 0.3.5\nexistingadmin ALL=(ALL:ALL) NOPASSWD: ALL\n' > "$sudoers_file"
 # Called indirectly by remove_passwordless_sudoers_safely.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 passwd() { printf 'existingadmin L 2026-08-03 0 99999 7 -1\n'; }
 assert_failure remove_passwordless_sudoers_safely existingadmin
 [ -e "$sudoers_file" ] || fail "unsafe uninstall removed passwordless sudo without a valid password"
