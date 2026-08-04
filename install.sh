@@ -863,6 +863,21 @@ old=${ORIGINAL_SSH_PORT}
   rm -f "$VPSGUARD_PENDING_PORT_MARKER"
 }
 
+wait_for_fail2ban_sshd_jail() {
+  local max_attempts="${1:-15}"
+  local attempt
+
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    if fail2ban-client status sshd >/dev/null 2>&1; then
+      return 0
+    fi
+    if [ "$attempt" -lt "$max_attempts" ]; then
+      sleep 1
+    fi
+  done
+  return 1
+}
+
 configure_fail2ban() {
   local content protected_ports
   assert_managed_or_absent "$FAIL2BAN_JAIL"
@@ -881,6 +896,7 @@ findtime = 10m
 bantime = 1h
 "
   atomic_write "$FAIL2BAN_JAIL" 644 "$content"
+  fail2ban-client -t >/dev/null 2>&1 || error "The fail2ban configuration test failed."
   if command -v systemctl >/dev/null 2>&1; then
     systemctl enable fail2ban.service
     systemctl restart fail2ban.service
@@ -888,7 +904,7 @@ bantime = 1h
   else
     service fail2ban restart
   fi
-  fail2ban-client status sshd >/dev/null 2>&1 || error "The fail2ban sshd jail is not active."
+  wait_for_fail2ban_sshd_jail || error "The fail2ban sshd jail did not become ready."
 }
 
 available_congestion_controls() {
