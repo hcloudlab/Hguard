@@ -241,7 +241,9 @@ validate_existing_user_account() {
   shell="$(printf '%s\n' "$passwd_entry" | awk -F: '{print $7}')"
 
   [ "$uid" -ge 1000 ] || error "Existing account ${username} is a system account (UID ${uid})."
-  [ -n "$home" ] && [ "$home" != "/" ] || error "Existing account ${username} has an unsafe home directory."
+  if [ -z "$home" ] || [ "$home" = "/" ]; then
+    error "Existing account ${username} has an unsafe home directory."
+  fi
   case "$shell" in
     */false|*/nologin|'') error "Existing account ${username} does not have a login shell." ;;
   esac
@@ -405,7 +407,9 @@ configure_authorized_keys() {
 
   check_root_ssh_key
   user_home="$(managed_user_home)"
-  [ -n "$user_home" ] && [ "$user_home" != "/" ] || error "Could not resolve a safe home directory for ${NEW_USER}."
+  if [ -z "$user_home" ] || [ "$user_home" = "/" ]; then
+    error "Could not resolve a safe home directory for ${NEW_USER}."
+  fi
   ssh_directory="${user_home}/.ssh"
   authorized_keys="${ssh_directory}/authorized_keys"
 
