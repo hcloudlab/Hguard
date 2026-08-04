@@ -83,6 +83,88 @@ sudo() {
   return 1
 }
 
+NEW_USER="secureadmin"
+SSH_PORT="2222"
+ORIGINAL_SSH_PORT="22"
+INSTALL_STATUS="failed"
+
+# A fresh install has no previously validated mode. Persist failure context,
+# but never present the requested mode as effective before behavior checks pass.
+PREVIOUS_SUDO_MODE=""
+SUDO_MODE="passwordless"
+write_pending_config_env
+assert_failure read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE
+assert_equal failed "$(read_env_value "$VPSGUARD_CONFIG_FILE" INSTALL_STATUS)" "fresh passwordless pending status"
+visudo_fail_file="$(sudoers_file_for_user)"
+assert_failure configure_passwordless_sudo
+[ ! -e "$(sudoers_file_for_user)" ] || fail "failed fresh passwordless setup left a managed sudoers file"
+assert_failure read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE
+
+# The same fresh installation can converge on rerun. Only successful sudo
+# behavior validation permits the effective mode to be persisted.
+visudo_fail_file=""
+configure_passwordless_sudo
+assert_success verify_passwordless_sudo_configuration
+write_config_env
+assert_equal passwordless "$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE)" "fresh passwordless mode after validation"
+assert_equal 1 "$(grep -Fxc 'secureadmin ALL=(ALL:ALL) NOPASSWD: ALL' "$(sudoers_file_for_user)")" "fresh passwordless rerun has one policy"
+
+rm -f "$VPSGUARD_CONFIG_FILE" "$(sudoers_file_for_user)"
+mock_password_state="L"
+passwd_fail="true"
+PREVIOUS_SUDO_MODE=""
+SUDO_MODE="password"
+write_pending_config_env
+assert_failure configure_password_sudo
+assert_failure read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE
+assert_equal failed "$(read_env_value "$VPSGUARD_CONFIG_FILE" INSTALL_STATUS)" "fresh password pending status"
+[ ! -e "$(sudoers_file_for_user)" ] || fail "failed fresh password setup left a managed sudoers file"
+
+# A rerun of the failed fresh install treats the missing key as unverified,
+# asks for a safe request again, and still does not persist it prematurely.
+SUDO_MODE=""
+PREVIOUS_SUDO_MODE="passwordless"
+resolve_sudo_mode
+assert_equal password "$SUDO_MODE" "non-interactive rerun uses a safe password request"
+assert_equal "" "$PREVIOUS_SUDO_MODE" "missing mode is not treated as previously validated"
+write_pending_config_env
+assert_failure read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE
+
+passwd_fail="false"
+configure_password_sudo
+assert_success verify_password_sudo_configuration
+write_config_env
+assert_equal password "$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE)" "fresh password mode after validation"
+
+# A failed password -> passwordless migration keeps the old validated mode and
+# does not leave a partially validated NOPASSWD policy behind.
+PREVIOUS_SUDO_MODE="password"
+SUDO_MODE="passwordless"
+write_pending_config_env
+visudo_fail_file="$(sudoers_file_for_user)"
+assert_failure configure_passwordless_sudo
+assert_equal password "$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE)" "failed passwordless migration keeps password mode"
+[ ! -e "$(sudoers_file_for_user)" ] || fail "failed passwordless migration left a managed sudoers file"
+assert_success passwordless_sudo_denied
+
+visudo_fail_file=""
+configure_passwordless_sudo
+assert_success verify_passwordless_sudo_configuration
+write_config_env
+assert_equal passwordless "$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE)" "passwordless migration rerun succeeds"
+
+# Reset mock state for the focused mode and migration checks below.
+rm -f "$VPSGUARD_CONFIG_FILE" "$(sudoers_file_for_user)"
+mock_password_state="L"
+passwd_calls=0
+sudo_v_calls=0
+sudo_n_true_calls=0
+sudo_n_i_calls=0
+sudo_v_fail="false"
+passwd_fail="false"
+visudo_fail_file=""
+PREVIOUS_SUDO_MODE=""
+
 assert_equal password "$(printf '\n' | prompt_initial_sudo_mode 2>/dev/null)" "default sudo selection"
 assert_equal password "$(printf '2\nNO\n1\n' | prompt_initial_sudo_mode 2>/dev/null)" "wrong risk confirmation returns to menu"
 assert_equal passwordless "$(printf '2\nI UNDERSTAND\n' | prompt_initial_sudo_mode 2>/dev/null)" "exact passwordless confirmation"

@@ -27,11 +27,11 @@ VPSGuard 不安装第三方内核，不自动重启服务器，也不会在卸�
 
 | Ubuntu | 当前状态 | 说明 |
 | --- | --- | --- |
-| 22.04 LTS | 静态与 mock 测试目标 | 尚未在本次升级中进行真实 VPS 安装/卸载验证 |
-| 24.04 LTS | 静态与 mock 测试目标 | 包含 `ssh.socket` 路径测试；真实远程切换仍待临时 VPS 验证 |
+| 22.04 LTS | 已完成真实 VPS 验证 | 覆盖传统 `ssh.service`、password/passwordless、22 → 2222 双阶段迁移、双向模式迁移、失败回滚、三次重跑、重启和安全部分卸载 |
+| 24.04 LTS | 已完成真实 VPS 验证 | 覆盖 `ssh.socket`、password/passwordless、双端口迁移、双向模式迁移、失败回滚、重跑、重启和安全部分卸载 |
 | 26.04 LTS | Experimental / 待验证 | 官方已发布，但当前没有 GitHub-hosted 26.04 runner，也未做真实 VPS 验证 |
 
-“静态与 mock 测试目标”不等于生产环境验证。首次使用 v0.3.5 时，建议选择带云控制台的临时 VPS。
+真实验证使用可随时重装并具有控制台回退能力的临时 VPS。不同云镜像仍可能包含额外 SSH、网络或软件源定制，首次使用时不要省略第二终端和云控制台门禁。
 
 ## 运行前准备 SSH 公钥
 
@@ -164,6 +164,8 @@ sudo -E env NEW_USER=myadmin SSH_PORT=2222 bash /tmp/vpsguard-install.sh
 ```
 
 配置文件由 root 拥有，权限为 `600`。`install.sh`、`status.sh` 和 `uninstall.sh` 都读取这一个来源，但不会直接 `source` 未验证数据。
+
+全新安装时，`SUDO_MODE` 只有在真实 sudo 行为验证成功后才写入 `config.env`。如果安装在密码设置、sudoers 校验或 sudo 行为验证阶段失败，配置会保留用户、端口和 `INSTALL_STATUS='failed'`，但省略尚未验证的 `SUDO_MODE`；`status.sh` 会将其显示为 `unverified`。这不代表 password 或 passwordless 已经生效，应修复失败原因后重新运行安装器。
 
 交互式重跑会提供：
 

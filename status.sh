@@ -136,6 +136,19 @@ passwordless_sudo_effective_for_user() {
   sudo -u "$user" sudo -n -i true >/dev/null 2>&1
 }
 
+configured_sudo_mode() {
+  local value
+
+  if ! value="$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE 2>/dev/null)"; then
+    printf 'unverified\n'
+    return 0
+  fi
+  case "$value" in
+    password|passwordless) printf '%s\n' "$value" ;;
+    *) printf 'invalid\n' ;;
+  esac
+}
+
 main() {
   local managed_user ssh_port original_port install_status sudo_mode user_entry user_home user_shell
   local authorized_keys sudoers_file effective_sshd listeners available_cc current_cc current_qdisc key_owner
@@ -152,11 +165,7 @@ main() {
   if ! ssh_port="$(read_env_value "$VPSGUARD_CONFIG_FILE" SSH_PORT 2>/dev/null)"; then ssh_port=""; fi
   if ! original_port="$(read_env_value "$VPSGUARD_CONFIG_FILE" ORIGINAL_SSH_PORT 2>/dev/null)"; then original_port=""; fi
   if ! install_status="$(read_env_value "$VPSGUARD_CONFIG_FILE" INSTALL_STATUS 2>/dev/null)"; then install_status=""; fi
-  if ! sudo_mode="$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE 2>/dev/null)"; then sudo_mode="password"; fi
-  case "$sudo_mode" in
-    password|passwordless) ;;
-    *) sudo_mode="invalid" ;;
-  esac
+  sudo_mode="$(configured_sudo_mode)"
 
   section "VPSGuard"
   printf 'Version: %s\n' "$VPSGUARD_VERSION"
@@ -225,6 +234,13 @@ main() {
       passwordless_effective="yes"
     fi
     printf 'Passwordless sudo effective: %s\n' "$passwordless_effective"
+    if [ "$sudo_mode" = "unverified" ]; then
+      if [ "$passwordless_effective" = "yes" ]; then
+        warn "No sudo mode has completed validation, but passwordless sudo is effective; configuration and actual behavior are inconsistent"
+      else
+        warn "No sudo mode has completed validation; password or passwordless must not be inferred from this state"
+      fi
+    fi
   else
     warn "Managed user does not exist"
   fi

@@ -4,9 +4,19 @@ set -euo pipefail
 # shellcheck source=tests/test_helper.sh
 . "$(dirname "$0")/test_helper.sh"
 
+temporary_root="$(mktemp -d)"
+trap 'rm -rf "$temporary_root"' EXIT
 export VPSGUARD_TEST_MODE=1
+export VPSGUARD_CONFIG_FILE="$temporary_root/config.env"
 # shellcheck source=status.sh
 . "$TEST_ROOT/status.sh"
+
+printf "NEW_USER='statusadmin'\nINSTALL_STATUS='failed'\n" > "$VPSGUARD_CONFIG_FILE"
+assert_equal unverified "$(configured_sudo_mode)" "missing SUDO_MODE is unverified"
+printf "SUDO_MODE='password'\n" >> "$VPSGUARD_CONFIG_FILE"
+assert_equal password "$(configured_sudo_mode)" "validated password mode"
+printf "SUDO_MODE='pending'\n" > "$VPSGUARD_CONFIG_FILE"
+assert_equal invalid "$(configured_sudo_mode)" "invalid SUDO_MODE is not inferred"
 
 effective_sshd='port 2222
 port 2222
@@ -44,5 +54,7 @@ assert_file_contains "$TEST_ROOT/status.sh" 'Sudo group membership: %s'
 assert_file_contains "$TEST_ROOT/status.sh" 'Managed sudoers file: present'
 assert_file_contains "$TEST_ROOT/status.sh" 'visudo validation: valid'
 assert_file_contains "$TEST_ROOT/status.sh" 'Passwordless sudo effective: %s'
+assert_file_contains "$TEST_ROOT/status.sh" 'No sudo mode has completed validation'
+assert_file_contains "$TEST_ROOT/status.sh" 'configuration and actual behavior are inconsistent'
 
 pass "status reports SSH listeners and behavior-based sudo mode details"

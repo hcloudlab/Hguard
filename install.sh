@@ -141,14 +141,18 @@ read_env_value() {
 }
 
 write_config_env() {
-  local sudo_mode="${1:-$SUDO_MODE}"
+  local sudo_mode="${1-$SUDO_MODE}"
   local install_status="${2:-$INSTALL_STATUS}"
-  local content
+  local content sudo_mode_line=""
+
+  if validate_sudo_mode "$sudo_mode"; then
+    sudo_mode_line="SUDO_MODE='${sudo_mode}'
+"
+  fi
 
   content="# Managed by VPSGuard ${VPSGUARD_VERSION}; values are validated before use.
 NEW_USER='${NEW_USER}'
-SUDO_MODE='${sudo_mode}'
-SSH_PORT='${SSH_PORT}'
+${sudo_mode_line}SSH_PORT='${SSH_PORT}'
 ORIGINAL_SSH_PORT='${ORIGINAL_SSH_PORT}'
 INSTALL_STATUS='${install_status}'
 "
@@ -156,7 +160,7 @@ INSTALL_STATUS='${install_status}'
 }
 
 write_pending_config_env() {
-  local effective_mode="$SUDO_MODE"
+  local effective_mode=""
 
   if validate_sudo_mode "$PREVIOUS_SUDO_MODE"; then
     effective_mode="$PREVIOUS_SUDO_MODE"
@@ -413,18 +417,24 @@ resolve_sudo_mode() {
   if [ -f "$VPSGUARD_CONFIG_FILE" ]; then
     if configured_mode="$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE 2>/dev/null)"; then
       validate_sudo_mode "$configured_mode" || error "Configured SUDO_MODE is invalid. Repair ${VPSGUARD_CONFIG_FILE}."
-    else
-      configured_mode="password"
-      info "Existing configuration has no SUDO_MODE; using the safe password default."
-    fi
-    PREVIOUS_SUDO_MODE="$configured_mode"
-    if [ -t 0 ]; then
-      if ! selected_mode="$(prompt_rerun_sudo_mode "$configured_mode")"; then
-        error "Installation cancelled."
+      PREVIOUS_SUDO_MODE="$configured_mode"
+      if [ -t 0 ]; then
+        if ! selected_mode="$(prompt_rerun_sudo_mode "$configured_mode")"; then
+          error "Installation cancelled."
+        fi
+        SUDO_MODE="$selected_mode"
+      else
+        SUDO_MODE="$configured_mode"
       fi
-      SUDO_MODE="$selected_mode"
     else
-      SUDO_MODE="$configured_mode"
+      PREVIOUS_SUDO_MODE=""
+      info "Existing configuration has no validated SUDO_MODE; sudo mode selection will run again."
+      if [ -t 0 ]; then
+        SUDO_MODE="$(prompt_initial_sudo_mode)"
+      else
+        SUDO_MODE="password"
+        info "No interactive terminal; using the safe password sudo request. It will not be persisted until validation succeeds."
+      fi
     fi
   elif [ -t 0 ]; then
     SUDO_MODE="$(prompt_initial_sudo_mode)"
