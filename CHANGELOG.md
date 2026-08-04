@@ -15,6 +15,7 @@ All notable changes to VPSGuard are documented here.
 
 ### Fixed
 
+- Distinguish `not-started`, `pending`, `incomplete`, and `complete` SSH port-finalization states in `status.sh`; failures before SSH configuration no longer report port migration as complete.
 - Match UFW TCP ports exactly, including IPv6 output, so `22/tcp` never matches `2222/tcp`.
 - Manage SSH policy through an atomic `00-vpsguard.conf` snippet and verify final values with `sshd -T`.
 - Prepend a reversible exact Include so cloud-image SSH directives before the wildcard include cannot override VPSGuard policy.

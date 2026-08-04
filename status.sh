@@ -103,6 +103,43 @@ ssh_listener_present() {
   '
 }
 
+
+port_finalization_state() {
+  local target_port="$1"
+  local original_port="$2"
+  local listeners="$3"
+  local managed_snippet_state="$4"
+  local pending_marker_state="$5"
+
+  if [ "$pending_marker_state" = "present" ]; then
+    printf 'pending\n'
+    return 0
+  fi
+
+  if [ "$managed_snippet_state" = "present" ] \
+    && [ -n "$target_port" ] \
+    && ssh_listener_present "$target_port" "$listeners"; then
+    if [ -z "$original_port" ] \
+      || [ "$original_port" = "$target_port" ] \
+      || ! ssh_listener_present "$original_port" "$listeners"; then
+      printf 'complete\n'
+      return 0
+    fi
+
+    printf 'incomplete\n'
+    return 0
+  fi
+
+  if [ "$managed_snippet_state" = "missing" ] \
+    && [ -n "$original_port" ] \
+    && ssh_listener_present "$original_port" "$listeners"; then
+    printf 'not-started\n'
+    return 0
+  fi
+
+  printf 'incomplete\n'
+}
+
 service_state() {
   local unit="$1"
   if ! command -v systemctl >/dev/null 2>&1; then
@@ -154,7 +191,7 @@ main() {
   local authorized_keys sudoers_file effective_sshd listeners available_cc current_cc current_qdisc key_owner
   local password_state sudo_policy sudo_group_member="no" passwordless_effective="no"
   local ssh_socket_state ssh_service_state sshd_service_state ufw_state="inactive"
-  local client_address host_context effective_socket_listeners
+  local client_address host_context effective_socket_listeners port_finalization
 
   if [ "$(id -u)" -ne 0 ]; then
     printf 'Please run status.sh as root so it can read protected VPSGuard state.\n' >&2
@@ -278,7 +315,13 @@ main() {
     fi
   fi
   printf 'Effective ssh.socket listeners: %s\n' "$(printf '%s\n' "$effective_socket_listeners" | systemd_socket_listeners_for_state_from_text "$ssh_socket_state")"
-  printf 'Port finalization: %s\n' "$([ -f "$VPSGUARD_PENDING_PORT_MARKER" ] && printf pending || printf complete)"
+  port_finalization="$(port_finalization_state \
+    "$ssh_port" \
+    "$original_port" \
+    "$listeners" \
+    "$([ -f "$VPSGUARD_SSHD_CONFIG" ] && printf present || printf missing)" \
+    "$([ -f "$VPSGUARD_PENDING_PORT_MARKER" ] && printf present || printf missing)")"
+  printf 'Port finalization: %s\n' "$port_finalization"
   if sshd -t >/dev/null 2>&1; then
     printf 'sshd syntax: valid\n'
   else

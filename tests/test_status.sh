@@ -36,6 +36,31 @@ assert_equal inactive \
   "$(printf '[::]:22 (Stream)\n' | systemd_socket_listeners_for_state_from_text inactive)" \
   "inactive systemd socket does not report configured port as a listener"
 
+
+listener_22='LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=1,fd=3))'
+listener_2222='LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* users:(("sshd",pid=1,fd=3))'
+listeners_both="${listener_22}"$'\n'"${listener_2222}"
+
+assert_equal not-started \
+  "$(port_finalization_state 2222 22 "$listener_22" missing missing)" \
+  "fresh pre-SSH failure is not started"
+
+assert_equal pending \
+  "$(port_finalization_state 2222 22 "$listeners_both" present present)" \
+  "dual-port migration with marker is pending"
+
+assert_equal complete \
+  "$(port_finalization_state 2222 22 "$listener_2222" present missing)" \
+  "finalized target listener is complete"
+
+assert_equal incomplete \
+  "$(port_finalization_state 2222 22 "$listeners_both" present missing)" \
+  "old listener without pending marker is incomplete"
+
+assert_equal incomplete \
+  "$(port_finalization_state 2222 22 '' present missing)" \
+  "missing target listener is incomplete"
+
 passwordless_behavior="true"
 sudo() {
   case "$*" in
