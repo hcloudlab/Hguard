@@ -28,6 +28,11 @@ assert_success validate_username service_admin-2
 assert_success validate_username "a$(printf 'b%.0s' {1..31})"
 assert_failure validate_username "a$(printf 'b%.0s' {1..32})"
 
+prompt_warning_file="$temporary_root/prompt-warning.log"
+prompted_user="$(printf '\nvpsadmin\n' | prompt_for_username 2>"$prompt_warning_file")"
+assert_equal vpsadmin "$prompted_user" "valid username after an invalid interactive attempt"
+assert_file_contains "$prompt_warning_file" '用户名无效'
+
 NEW_USER="existingadmin"
 adduser() { fail "adduser must not run for an existing user"; }
 usermod_log="$temporary_root/usermod.log"
@@ -59,4 +64,4 @@ if grep -RIn --exclude-dir=.git --exclude='CHANGELOG.md' --exclude='test_usernam
   fail "repository still contains a default administrator username"
 fi
 
-pass "username validation, existing-user reuse and non-interactive behavior"
+pass "username validation, interactive retry, existing-user reuse and non-interactive behavior"
