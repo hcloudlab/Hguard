@@ -32,6 +32,7 @@ REQUESTED_SSH_PORT="${SSH_PORT:-}"
 NEW_USER=""
 PREVIOUS_MANAGED_USER=""
 SUDO_MODE=""
+PREVIOUS_SUDO_MODE=""
 SSH_PORT=""
 ORIGINAL_SSH_PORT=""
 PORT_MIGRATION_REQUIRED="false"
@@ -140,16 +141,27 @@ read_env_value() {
 }
 
 write_config_env() {
+  local sudo_mode="${1:-$SUDO_MODE}"
+  local install_status="${2:-$INSTALL_STATUS}"
   local content
 
   content="# Managed by VPSGuard ${VPSGUARD_VERSION}; values are validated before use.
 NEW_USER='${NEW_USER}'
-SUDO_MODE='${SUDO_MODE}'
+SUDO_MODE='${sudo_mode}'
 SSH_PORT='${SSH_PORT}'
 ORIGINAL_SSH_PORT='${ORIGINAL_SSH_PORT}'
-INSTALL_STATUS='${INSTALL_STATUS}'
+INSTALL_STATUS='${install_status}'
 "
   atomic_write "$VPSGUARD_CONFIG_FILE" 600 "$content"
+}
+
+write_pending_config_env() {
+  local effective_mode="$SUDO_MODE"
+
+  if validate_sudo_mode "$PREVIOUS_SUDO_MODE"; then
+    effective_mode="$PREVIOUS_SUDO_MODE"
+  fi
+  write_config_env "$effective_mode" "$INSTALL_STATUS"
 }
 
 boolean_command_state() {
@@ -405,6 +417,7 @@ resolve_sudo_mode() {
       configured_mode="password"
       info "Existing configuration has no SUDO_MODE; using the safe password default."
     fi
+    PREVIOUS_SUDO_MODE="$configured_mode"
     if [ -t 0 ]; then
       if ! selected_mode="$(prompt_rerun_sudo_mode "$configured_mode")"; then
         error "Installation cancelled."
@@ -649,8 +662,14 @@ ensure_sudo_password() {
     [ -t 0 ] || error "Administrator ${NEW_USER} has no usable password. Set one with 'passwd ${NEW_USER}' from a trusted console, then rerun VPSGuard."
   fi
   warn "VPSGuard uses standard password-authenticated sudo. Set a strong password for ${NEW_USER}; it is not used for SSH login."
-  passwd "$NEW_USER" || error "Could not set the sudo password for ${NEW_USER}."
-  user_password_is_set || error "Password state for ${NEW_USER} is still locked or unavailable."
+  if ! passwd "$NEW_USER"; then
+    warn "Could not set the sudo password for ${NEW_USER}."
+    return 1
+  fi
+  if ! user_password_is_set; then
+    warn "Password state for ${NEW_USER} is still locked or unavailable."
+    return 1
+  fi
 }
 
 confirm_sudo_password_authentication() {
@@ -728,7 +747,7 @@ configure_password_sudo() {
     return 1
   fi
 
-  ensure_sudo_password
+  ensure_sudo_password || return 1
   user_in_sudo_group || return 1
   visudo -c >/dev/null 2>&1 || return 1
   standard_sudo_policy_available || return 1
@@ -1386,7 +1405,9 @@ main() {
   resolve_sudo_mode
   resolve_ssh_ports
   INSTALL_STATUS="failed"
-  write_config_env
+  # Until the requested sudo transition is fully verified, keep the last
+  # effective mode in persistent state so failed reruns report truthfully.
+  write_pending_config_env
   record_preinstall_state
   upgrade_system
   # An OpenSSH package upgrade can remove /run/sshd while restarting the
@@ -1397,6 +1418,7 @@ main() {
   configure_authorized_keys
   configure_sudo
   verify_sudo_configuration || error "Sudo validation failed. SSH hardening was not started."
+  write_config_env
 
   configure_ufw_before_ssh
   configure_ssh_safely

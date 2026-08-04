@@ -20,6 +20,7 @@ sudo_v_calls=0
 sudo_n_true_calls=0
 sudo_n_i_calls=0
 sudo_v_fail="false"
+passwd_fail="false"
 visudo_fail_file=""
 
 id() {
@@ -36,6 +37,9 @@ passwd() {
     return 0
   fi
   passwd_calls=$((passwd_calls + 1))
+  if [ "$passwd_fail" = "true" ]; then
+    return 1
+  fi
   mock_password_state="P"
 }
 
@@ -144,10 +148,27 @@ assert_equal "$password_before" "$mock_password_state" "password to passwordless
 
 rollback_checksum="$(checksum_file "$sudoers_file")"
 SUDO_MODE="password"
+PREVIOUS_SUDO_MODE="passwordless"
+INSTALL_STATUS="failed"
+NEW_USER="secureadmin"
+SSH_PORT="2222"
+ORIGINAL_SSH_PORT="22"
+write_pending_config_env
 sudo_v_fail="true"
 assert_failure configure_password_sudo
 sudo_v_fail="false"
 assert_equal "$rollback_checksum" "$(checksum_file "$sudoers_file")" "failed mode switch restores passwordless policy"
+assert_equal passwordless "$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE)" "sudo validation failure preserves the effective configured mode"
+assert_equal failed "$(read_env_value "$VPSGUARD_CONFIG_FILE" INSTALL_STATUS)" "failed migration remains visible"
+assert_equal password "$SUDO_MODE" "pending config write preserves the requested in-memory mode"
+
+mock_password_state="L"
+passwd_fail="true"
+assert_failure configure_password_sudo
+passwd_fail="false"
+assert_equal L "$mock_password_state" "failed passwd does not create or empty a Linux password"
+assert_equal "$rollback_checksum" "$(checksum_file "$sudoers_file")" "passwd failure preserves passwordless policy"
+assert_equal passwordless "$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE)" "passwd failure preserves the effective configured mode"
 
 old_file="${SUDOERS_DIR}/vpsguard-oldadmin"
 printf '# Managed by VPSGuard 0.3.5\noldadmin ALL=(ALL:ALL) NOPASSWD: ALL\n' > "$old_file"
