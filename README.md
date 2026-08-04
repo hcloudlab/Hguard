@@ -11,6 +11,8 @@ VPSGuard 不安装第三方内核，不自动重启服务器，也不会在卸�
 - 使用发行版标准 `sudo` 组和用户密码提供完整管理员权限
 - 在 SSH 加固前验证公钥、sudo 策略、密码状态，并实际验证一次密码认证
 - 使用 `/etc/ssh/sshd_config.d/00-vpsguard.conf` 管理独立 SSH 配置
+- 在主配置首行加入可识别、可卸载的精确 Include，避免云镜像的前置 SSH 指令抢先生效
+- 在 `ssh.socket` 模式下管理独立 systemd socket drop-in，使 systemd 实际监听目标端口
 - 使用 `sshd -t` 和 `sshd -T` 验证语法及最终生效值
 - 支持 `ssh.socket`、`ssh.service`、`sshd.service` 和传统 service 模式
 - 精确验证 SSH 监听端口及 UFW TCP 规则
@@ -238,12 +240,13 @@ VPSGuard 首次修改系统前会记录：
 
 ```text
 /etc/ssh/sshd_config.d/00-vpsguard.conf
+/etc/systemd/system/ssh.socket.d/00-vpsguard.conf  # 仅 ssh.socket 模式
 /etc/fail2ban/jail.d/vpsguard-sshd.local
 /etc/sysctl.d/99-vpsguard-bbr.conf
 /etc/modules-load.d/vpsguard-bbr.conf
 ```
 
-VPSGuard 不删除未知 SSH 片段、未知 fail2ban jail 或其他软件的 BBR 配置。
+VPSGuard 不删除未知 SSH 片段、未知 systemd socket override、未知 fail2ban jail 或其他软件的 BBR 配置。主 `sshd_config` 中只维护带明确起止标记的首行 Include 区块。
 
 ## 安全卸载
 

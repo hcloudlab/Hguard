@@ -10,7 +10,10 @@ VPSGUARD_STATE_FILE="${VPSGUARD_STATE_FILE:-${VPSGUARD_STATE_DIR}/state.env}"
 VPSGUARD_MANAGED_RULES="${VPSGUARD_MANAGED_RULES:-${VPSGUARD_STATE_DIR}/managed-rules}"
 VPSGUARD_INSTALLED_MARKER="${VPSGUARD_INSTALLED_MARKER:-${VPSGUARD_STATE_DIR}/.installed}"
 VPSGUARD_PENDING_PORT_MARKER="${VPSGUARD_PENDING_PORT_MARKER:-${VPSGUARD_STATE_DIR}/.pending-port-finalization}"
+SSHD_CONFIG="${SSHD_CONFIG:-${VPSGUARD_ETC_ROOT}/ssh/sshd_config}"
 VPSGUARD_SSHD_CONFIG="${VPSGUARD_SSHD_CONFIG:-${VPSGUARD_ETC_ROOT}/ssh/sshd_config.d/00-vpsguard.conf}"
+SYSTEMD_SYSTEM_DIR="${SYSTEMD_SYSTEM_DIR:-${VPSGUARD_ETC_ROOT}/systemd/system}"
+VPSGUARD_SSH_SOCKET_OVERRIDE="${VPSGUARD_SSH_SOCKET_OVERRIDE:-${SYSTEMD_SYSTEM_DIR}/ssh.socket.d/00-vpsguard.conf}"
 FAIL2BAN_JAIL="${FAIL2BAN_JAIL:-${VPSGUARD_ETC_ROOT}/fail2ban/jail.d/vpsguard-sshd.local}"
 SUDOERS_DIR="${SUDOERS_DIR:-${VPSGUARD_ETC_ROOT}/sudoers.d}"
 BBR_SYSCTL_FILE="${BBR_SYSCTL_FILE:-${VPSGUARD_ETC_ROOT}/sysctl.d/99-vpsguard-bbr.conf}"
@@ -21,6 +24,8 @@ YELLOW="\033[33m"
 RED="\033[31m"
 BOLD="\033[1m"
 NC="\033[0m"
+SSHD_INCLUDE_BEGIN="# BEGIN VPSGuard managed include"
+SSHD_INCLUDE_END="# END VPSGuard managed include"
 
 info() {
   printf '%b[INFO]%b %s\n' "$GREEN" "$NC" "$1"
@@ -141,35 +146,85 @@ remove_fail2ban_jail_safely() {
   info "fail2ban service enablement and unrelated jails were preserved."
 }
 
+remove_vpsguard_sshd_include() {
+  local temporary_file begin_count end_count begin_line end_line mode
+
+  if ! begin_count="$(grep -Fxc "$SSHD_INCLUDE_BEGIN" "$SSHD_CONFIG")"; then begin_count=0; fi
+  if ! end_count="$(grep -Fxc "$SSHD_INCLUDE_END" "$SSHD_CONFIG")"; then end_count=0; fi
+  if [ "$begin_count" -eq 0 ] && [ "$end_count" -eq 0 ]; then
+    return 0
+  fi
+  if [ "$begin_count" -ne 1 ] || [ "$end_count" -ne 1 ]; then
+    warn "Malformed VPSGuard include markers were preserved in ${SSHD_CONFIG}."
+    return 1
+  fi
+  begin_line="$(grep -Fn "$SSHD_INCLUDE_BEGIN" "$SSHD_CONFIG" | cut -d: -f1)"
+  end_line="$(grep -Fn "$SSHD_INCLUDE_END" "$SSHD_CONFIG" | cut -d: -f1)"
+  if [ "$begin_line" -ge "$end_line" ]; then
+    warn "Out-of-order VPSGuard include markers were preserved in ${SSHD_CONFIG}."
+    return 1
+  fi
+  temporary_file="$(mktemp "${SSHD_CONFIG}.uninstall.XXXXXX")"
+  awk -v begin="$SSHD_INCLUDE_BEGIN" -v end="$SSHD_INCLUDE_END" '
+    $0 == begin {inside=1; next}
+    $0 == end {inside=0; next}
+    !inside {print}
+  ' "$SSHD_CONFIG" > "$temporary_file"
+  mode="$(stat -c '%a' "$SSHD_CONFIG" 2>/dev/null || printf 644)"
+  chmod "$mode" "$temporary_file"
+  if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+    chown root:root "$temporary_file"
+  fi
+  mv -f "$temporary_file" "$SSHD_CONFIG"
+}
+
 remove_ssh_snippet_safely() {
   local target_port="$1"
   local original_port="$2"
-  local backup
+  local main_backup snippet_backup="" socket_backup=""
 
-  [ -e "$VPSGUARD_SSHD_CONFIG" ] || return 0
-  if ! managed_file_is_owned "$VPSGUARD_SSHD_CONFIG"; then
+  if [ -e "$VPSGUARD_SSHD_CONFIG" ] && ! managed_file_is_owned "$VPSGUARD_SSHD_CONFIG"; then
     warn "SSH snippet is not recognizable as VPSGuard-managed; preserving it."
     return 1
   fi
+  if [ -e "$VPSGUARD_SSH_SOCKET_OVERRIDE" ] && ! managed_file_is_owned "$VPSGUARD_SSH_SOCKET_OVERRIDE"; then
+    warn "ssh.socket override is not recognizable as VPSGuard-managed; preserving it."
+    return 1
+  fi
   if [ "$target_port" != "$original_port" ] || [ -f "$VPSGUARD_PENDING_PORT_MARKER" ]; then
-    warn "VPSGuard SSH snippet was preserved because removing a changed/pending port remotely could cause lockout."
+    warn "VPSGuard SSH policy was preserved because removing a changed/pending port remotely could cause lockout."
     return 1
   fi
 
-  backup="$(mktemp "${VPSGUARD_SSHD_CONFIG}.uninstall.XXXXXX")"
-  cp "$VPSGUARD_SSHD_CONFIG" "$backup"
+  main_backup="$(mktemp "${SSHD_CONFIG}.vpsguard-backup.XXXXXX")"
+  cp -p "$SSHD_CONFIG" "$main_backup"
+  if [ -e "$VPSGUARD_SSHD_CONFIG" ]; then
+    snippet_backup="$(mktemp "${VPSGUARD_SSHD_CONFIG}.uninstall.XXXXXX")"
+    cp -p "$VPSGUARD_SSHD_CONFIG" "$snippet_backup"
+  fi
+  if [ -e "$VPSGUARD_SSH_SOCKET_OVERRIDE" ]; then
+    socket_backup="$(mktemp "${VPSGUARD_SSH_SOCKET_OVERRIDE}.uninstall.XXXXXX")"
+    cp -p "$VPSGUARD_SSH_SOCKET_OVERRIDE" "$socket_backup"
+  fi
+
+  remove_vpsguard_sshd_include || return 1
   rm -f "$VPSGUARD_SSHD_CONFIG"
+  rm -f "$VPSGUARD_SSH_SOCKET_OVERRIDE"
   if sshd -t && apply_ssh_runtime; then
-    rm -f "$backup"
-    info "Removed VPSGuard SSH snippet after syntax and runtime validation."
+    rm -f "$main_backup"
+    [ -z "$snippet_backup" ] || rm -f "$snippet_backup"
+    [ -z "$socket_backup" ] || rm -f "$socket_backup"
+    info "Removed VPSGuard SSH include, snippet and socket override after syntax and runtime validation."
     return 0
   fi
 
-  mv -f "$backup" "$VPSGUARD_SSHD_CONFIG"
+  mv -f "$main_backup" "$SSHD_CONFIG"
+  [ -z "$snippet_backup" ] || mv -f "$snippet_backup" "$VPSGUARD_SSHD_CONFIG"
+  [ -z "$socket_backup" ] || mv -f "$socket_backup" "$VPSGUARD_SSH_SOCKET_OVERRIDE"
   if ! apply_ssh_runtime; then
-    warn "The SSH snippet was restored, but runtime re-application also failed. Keep the current session open and inspect SSH manually."
+    warn "The SSH policy was restored, but runtime re-application also failed. Keep the current session open and inspect SSH manually."
   fi
-  warn "SSH restoration could not be validated; the VPSGuard snippet was restored."
+  warn "SSH restoration could not be validated; the VPSGuard policy was restored."
   return 1
 }
 

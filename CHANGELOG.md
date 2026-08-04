@@ -16,6 +16,8 @@ All notable changes to VPSGuard are documented here.
 
 - Match UFW TCP ports exactly, including IPv6 output, so `22/tcp` never matches `2222/tcp`.
 - Manage SSH policy through an atomic `00-vpsguard.conf` snippet and verify final values with `sshd -T`.
+- Prepend a reversible exact Include so cloud-image SSH directives before the wildcard include cannot override VPSGuard policy.
+- Manage a dedicated `ssh.socket` drop-in so Ubuntu 24.04 systemd socket listeners converge with the staged and final SSH ports.
 - Replace permanent phase-marker skips with actual-state reconciliation on every run.
 - Replace fixed success text with user, key, sudo, SSH, listener, UFW, fail2ban, and BBR acceptance checks.
 

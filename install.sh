@@ -19,6 +19,8 @@ VPSGUARD_PENDING_PORT_MARKER="${VPSGUARD_PENDING_PORT_MARKER:-${VPSGUARD_STATE_D
 SSHD_CONFIG="${SSHD_CONFIG:-${VPSGUARD_ETC_ROOT}/ssh/sshd_config}"
 SSHD_CONFIG_DIR="${SSHD_CONFIG_DIR:-${VPSGUARD_ETC_ROOT}/ssh/sshd_config.d}"
 VPSGUARD_SSHD_CONFIG="${VPSGUARD_SSHD_CONFIG:-${SSHD_CONFIG_DIR}/00-vpsguard.conf}"
+SYSTEMD_SYSTEM_DIR="${SYSTEMD_SYSTEM_DIR:-${VPSGUARD_ETC_ROOT}/systemd/system}"
+VPSGUARD_SSH_SOCKET_OVERRIDE="${VPSGUARD_SSH_SOCKET_OVERRIDE:-${SYSTEMD_SYSTEM_DIR}/ssh.socket.d/00-vpsguard.conf}"
 FAIL2BAN_JAIL="${FAIL2BAN_JAIL:-${VPSGUARD_ETC_ROOT}/fail2ban/jail.d/vpsguard-sshd.local}"
 SUDOERS_DIR="${SUDOERS_DIR:-${VPSGUARD_ETC_ROOT}/sudoers.d}"
 BBR_SYSCTL_FILE="${BBR_SYSCTL_FILE:-${VPSGUARD_ETC_ROOT}/sysctl.d/99-vpsguard-bbr.conf}"
@@ -35,6 +37,8 @@ INSTALL_STATUS="failed"
 BBR_STATUS="unsupported"
 SSH_RUNTIME_MODE="unknown"
 SSH_SERVICE_UNIT=""
+SSHD_INCLUDE_BEGIN="# BEGIN VPSGuard managed include"
+SSHD_INCLUDE_END="# END VPSGuard managed include"
 
 GREEN="\033[32m"
 YELLOW="\033[33m"
@@ -154,7 +158,8 @@ boolean_command_state() {
 
 record_preinstall_state() {
   local ufw_installed ufw_active fail2ban_installed fail2ban_active fail2ban_enabled
-  local sshd_dropin_preexisting fail2ban_jail_preexisting bbr_sysctl_preexisting bbr_modules_preexisting
+  local sshd_dropin_preexisting sshd_include_preexisting ssh_socket_override_preexisting
+  local fail2ban_jail_preexisting bbr_sysctl_preexisting bbr_modules_preexisting
   local content
 
   if [ -f "$VPSGUARD_STATE_FILE" ]; then
@@ -177,6 +182,8 @@ record_preinstall_state() {
   fi
 
   sshd_dropin_preexisting="$(boolean_command_state test -e "$VPSGUARD_SSHD_CONFIG")"
+  sshd_include_preexisting="$(boolean_command_state grep -Fqx "$SSHD_INCLUDE_BEGIN" "$SSHD_CONFIG")"
+  ssh_socket_override_preexisting="$(boolean_command_state test -e "$VPSGUARD_SSH_SOCKET_OVERRIDE")"
   fail2ban_jail_preexisting="$(boolean_command_state test -e "$FAIL2BAN_JAIL")"
   bbr_sysctl_preexisting="$(boolean_command_state test -e "$BBR_SYSCTL_FILE")"
   bbr_modules_preexisting="$(boolean_command_state test -e "$BBR_MODULES_FILE")"
@@ -188,6 +195,8 @@ FAIL2BAN_INSTALLED='${fail2ban_installed}'
 FAIL2BAN_ACTIVE='${fail2ban_active}'
 FAIL2BAN_ENABLED='${fail2ban_enabled}'
 SSHD_DROPIN_PREEXISTED='${sshd_dropin_preexisting}'
+SSHD_INCLUDE_PREEXISTED='${sshd_include_preexisting}'
+SSH_SOCKET_OVERRIDE_PREEXISTED='${ssh_socket_override_preexisting}'
 FAIL2BAN_JAIL_PREEXISTED='${fail2ban_jail_preexisting}'
 BBR_SYSCTL_PREEXISTED='${bbr_sysctl_preexisting}'
 BBR_MODULES_PREEXISTED='${bbr_modules_preexisting}'
@@ -632,6 +641,69 @@ X11Forwarding no
   atomic_write "$VPSGUARD_SSHD_CONFIG" 600 "$content"
 }
 
+ensure_vpsguard_sshd_include_first() {
+  local begin_count end_count begin_line end_line existing_content content mode
+
+  [ -f "$SSHD_CONFIG" ] || error "OpenSSH server config is missing: ${SSHD_CONFIG}"
+  if ! begin_count="$(grep -Fxc "$SSHD_INCLUDE_BEGIN" "$SSHD_CONFIG")"; then begin_count=0; fi
+  if ! end_count="$(grep -Fxc "$SSHD_INCLUDE_END" "$SSHD_CONFIG")"; then end_count=0; fi
+  if { [ "$begin_count" -ne 0 ] || [ "$end_count" -ne 0 ]; } \
+    && { [ "$begin_count" -ne 1 ] || [ "$end_count" -ne 1 ]; }; then
+    error "Refusing to modify malformed VPSGuard include markers in ${SSHD_CONFIG}."
+  fi
+  if [ "$begin_count" -eq 1 ]; then
+    begin_line="$(grep -Fn "$SSHD_INCLUDE_BEGIN" "$SSHD_CONFIG" | cut -d: -f1)"
+    end_line="$(grep -Fn "$SSHD_INCLUDE_END" "$SSHD_CONFIG" | cut -d: -f1)"
+    [ "$begin_line" -lt "$end_line" ] || error "VPSGuard include markers are out of order in ${SSHD_CONFIG}."
+  fi
+
+  existing_content="$(awk -v begin="$SSHD_INCLUDE_BEGIN" -v end="$SSHD_INCLUDE_END" '
+    $0 == begin {inside=1; next}
+    $0 == end {inside=0; next}
+    !inside {print}
+  ' "$SSHD_CONFIG")"
+  content="${SSHD_INCLUDE_BEGIN}
+Include ${VPSGUARD_SSHD_CONFIG}
+${SSHD_INCLUDE_END}
+${existing_content}
+"
+  if ! mode="$(stat -c '%a' "$SSHD_CONFIG" 2>/dev/null)"; then mode=644; fi
+  atomic_write "$SSHD_CONFIG" "$mode" "$content"
+}
+
+write_vpsguard_ssh_socket_override() {
+  local keep_old_port="${1:-false}"
+  local listen_lines content
+
+  assert_managed_or_absent "$VPSGUARD_SSH_SOCKET_OVERRIDE"
+  listen_lines="ListenStream=0.0.0.0:${SSH_PORT}
+ListenStream=[::]:${SSH_PORT}"
+  if [ "$keep_old_port" = "true" ] && [ "$ORIGINAL_SSH_PORT" != "$SSH_PORT" ]; then
+    listen_lines="${listen_lines}
+ListenStream=0.0.0.0:${ORIGINAL_SSH_PORT}
+ListenStream=[::]:${ORIGINAL_SSH_PORT}"
+  fi
+  content="# Managed by VPSGuard ${VPSGUARD_VERSION}
+[Socket]
+ListenStream=
+${listen_lines}
+"
+  atomic_write "$VPSGUARD_SSH_SOCKET_OVERRIDE" 644 "$content"
+}
+
+write_vpsguard_ssh_runtime_policy() {
+  local keep_old_port="${1:-false}"
+
+  write_vpsguard_sshd_config "$keep_old_port"
+  ensure_vpsguard_sshd_include_first
+  detect_ssh_runtime_mode
+  if [ "$SSH_RUNTIME_MODE" = "socket" ]; then
+    write_vpsguard_ssh_socket_override "$keep_old_port"
+  elif [ -f "$VPSGUARD_SSH_SOCKET_OVERRIDE" ] && head -n 1 "$VPSGUARD_SSH_SOCKET_OVERRIDE" | grep -Fq 'Managed by VPSGuard'; then
+    rm -f "$VPSGUARD_SSH_SOCKET_OVERRIDE"
+  fi
+}
+
 effective_sshd_value_from_text() {
   local key="$1"
   awk -v wanted="$key" '$1 == wanted {print $2; exit}'
@@ -749,7 +821,7 @@ configure_ssh_safely() {
     keep_old_port="true"
   fi
 
-  write_vpsguard_sshd_config "$keep_old_port"
+  write_vpsguard_ssh_runtime_policy "$keep_old_port"
   verify_effective_sshd_config || error "Effective sshd configuration does not match the VPSGuard policy. SSH was not restarted."
   apply_ssh_runtime || error "Failed to apply SSH configuration safely. Keep the current root session open."
   verify_ssh_listener "$SSH_PORT" || error "Target SSH port ${SSH_PORT} is not listening through sshd/systemd. Old UFW access was preserved."
@@ -777,7 +849,7 @@ old=${ORIGINAL_SSH_PORT}
     return 0
   fi
 
-  write_vpsguard_sshd_config false
+  write_vpsguard_ssh_runtime_policy false
   verify_effective_sshd_config || error "Final SSH configuration validation failed; old UFW rule remains."
   apply_ssh_runtime || error "Could not finalize the SSH runtime; old UFW rule remains."
   verify_ssh_listener "$SSH_PORT" || error "Target SSH listener disappeared during finalization; old UFW rule remains."

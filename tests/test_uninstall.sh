@@ -61,4 +61,16 @@ sudo() {
 assert_success remove_legacy_sudoers_safely existingadmin
 [ ! -e "$sudoers_file" ] || fail "safe legacy passwordless sudo override was not removed"
 
-pass "uninstall removes only owned files/rules and preserves standard sudo, current access, services and users"
+mkdir -p "$(dirname "$SSHD_CONFIG")"
+printf '%s\n' \
+  '# BEGIN VPSGuard managed include' \
+  'Include /etc/ssh/sshd_config.d/00-vpsguard.conf' \
+  '# END VPSGuard managed include' \
+  'PermitRootLogin prohibit-password' > "$SSHD_CONFIG"
+assert_success remove_vpsguard_sshd_include
+assert_file_contains "$SSHD_CONFIG" 'PermitRootLogin prohibit-password'
+if grep -Fq 'VPSGuard managed include' "$SSHD_CONFIG"; then
+  fail "managed sshd include markers remained after safe removal"
+fi
+
+pass "uninstall removes only owned policy/rules and preserves standard sudo, vendor SSH, services and users"
