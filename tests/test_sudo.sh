@@ -124,7 +124,8 @@ assert_equal failed "$(read_env_value "$VPSGUARD_CONFIG_FILE" INSTALL_STATUS)" "
 # asks for a safe request again, and still does not persist it prematurely.
 SUDO_MODE=""
 PREVIOUS_SUDO_MODE="passwordless"
-resolve_sudo_mode
+# Force the non-interactive path even when tests/run.sh is launched from a TTY.
+resolve_sudo_mode </dev/null
 assert_equal password "$SUDO_MODE" "non-interactive rerun uses a safe password request"
 assert_equal "" "$PREVIOUS_SUDO_MODE" "missing mode is not treated as previously validated"
 write_pending_config_env
