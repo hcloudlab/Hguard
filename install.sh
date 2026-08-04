@@ -33,6 +33,7 @@ NEW_USER=""
 PREVIOUS_MANAGED_USER=""
 SSH_PORT=""
 ORIGINAL_SSH_PORT=""
+PORT_MIGRATION_REQUIRED="false"
 INSTALL_STATUS="failed"
 BBR_STATUS="unsupported"
 SSH_RUNTIME_MODE="unknown"
@@ -355,6 +356,32 @@ prepare_sshd_runtime_directory() {
   ensure_directory "${VPSGUARD_RUN_ROOT}/sshd" 755
 }
 
+finalized_port_state_matches() {
+  local configured_port="$1"
+  local installed_status
+
+  [ -f "$VPSGUARD_INSTALLED_MARKER" ] || return 1
+  [ ! -e "$VPSGUARD_PENDING_PORT_MARKER" ] || return 1
+  [ "$configured_port" = "$SSH_PORT" ] || return 1
+  if ! installed_status="$(awk 'NF {print; exit}' "$VPSGUARD_INSTALLED_MARKER" 2>/dev/null)"; then
+    installed_status=""
+  fi
+  case "$installed_status" in
+    success|success-with-warnings) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+resolve_port_migration_requirement() {
+  local configured_port="$1"
+
+  PORT_MIGRATION_REQUIRED="false"
+  if [ "$ORIGINAL_SSH_PORT" != "$SSH_PORT" ] \
+    && ! finalized_port_state_matches "$configured_port"; then
+    PORT_MIGRATION_REQUIRED="true"
+  fi
+}
+
 resolve_ssh_ports() {
   local configured_port configured_original
 
@@ -379,7 +406,8 @@ resolve_ssh_ports() {
     SSH_PORT="$ORIGINAL_SSH_PORT"
   fi
 
-  info "SSH port plan: current/original=${ORIGINAL_SSH_PORT}, target=${SSH_PORT}"
+  resolve_port_migration_requirement "$configured_port"
+  info "SSH port plan: original=${ORIGINAL_SSH_PORT}, target=${SSH_PORT}, migration-required=${PORT_MIGRATION_REQUIRED}"
 }
 
 upgrade_system() {
@@ -607,7 +635,7 @@ configure_ufw_before_ssh() {
   fi
 
   ensure_ufw_tcp_rule "$SSH_PORT"
-  if [ "$ORIGINAL_SSH_PORT" != "$SSH_PORT" ]; then
+  if [ "$PORT_MIGRATION_REQUIRED" = "true" ]; then
     ensure_ufw_tcp_rule "$ORIGINAL_SSH_PORT"
   fi
 
@@ -815,12 +843,8 @@ verify_ssh_listener() {
 }
 
 configure_ssh_safely() {
-  local keep_old_port="false"
+  local keep_old_port="$PORT_MIGRATION_REQUIRED"
   local answer=""
-
-  if [ "$ORIGINAL_SSH_PORT" != "$SSH_PORT" ]; then
-    keep_old_port="true"
-  fi
 
   write_vpsguard_ssh_runtime_policy "$keep_old_port"
   verify_effective_sshd_config || error "Effective sshd configuration does not match the VPSGuard policy. SSH was not restarted."
@@ -831,7 +855,7 @@ configure_ssh_safely() {
   fi
   ufw_tcp_rule_exists "$SSH_PORT" || error "Target SSH port ${SSH_PORT}/tcp is not allowed by UFW."
 
-  if [ "$ORIGINAL_SSH_PORT" = "$SSH_PORT" ]; then
+  if [ "$PORT_MIGRATION_REQUIRED" != "true" ]; then
     rm -f "$VPSGUARD_PENDING_PORT_MARKER"
     return 0
   fi
@@ -862,6 +886,7 @@ old=${ORIGINAL_SSH_PORT}
     warn "Old UFW rule ${ORIGINAL_SSH_PORT}/tcp predates VPSGuard and was preserved."
   fi
   rm -f "$VPSGUARD_PENDING_PORT_MARKER"
+  PORT_MIGRATION_REQUIRED="false"
 }
 
 wait_for_fail2ban_sshd_jail() {
