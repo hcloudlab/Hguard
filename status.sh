@@ -1,88 +1,258 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+VPSGUARD_VERSION="0.3.5"
+VPSGUARD_TEST_MODE="${VPSGUARD_TEST_MODE:-0}"
+VPSGUARD_ETC_ROOT="${VPSGUARD_ETC_ROOT:-/etc}"
+VPSGUARD_STATE_DIR="${VPSGUARD_STATE_DIR:-${VPSGUARD_ETC_ROOT}/vpsguard}"
+VPSGUARD_CONFIG_FILE="${VPSGUARD_CONFIG_FILE:-${VPSGUARD_STATE_DIR}/config.env}"
+VPSGUARD_STATE_FILE="${VPSGUARD_STATE_FILE:-${VPSGUARD_STATE_DIR}/state.env}"
+VPSGUARD_INSTALLED_MARKER="${VPSGUARD_INSTALLED_MARKER:-${VPSGUARD_STATE_DIR}/.installed}"
+VPSGUARD_PENDING_PORT_MARKER="${VPSGUARD_PENDING_PORT_MARKER:-${VPSGUARD_STATE_DIR}/.pending-port-finalization}"
+VPSGUARD_SSHD_CONFIG="${VPSGUARD_SSHD_CONFIG:-${VPSGUARD_ETC_ROOT}/ssh/sshd_config.d/00-vpsguard.conf}"
+FAIL2BAN_JAIL="${FAIL2BAN_JAIL:-${VPSGUARD_ETC_ROOT}/fail2ban/jail.d/vpsguard-sshd.local}"
+SUDOERS_DIR="${SUDOERS_DIR:-${VPSGUARD_ETC_ROOT}/sudoers.d}"
+BBR_SYSCTL_FILE="${BBR_SYSCTL_FILE:-${VPSGUARD_ETC_ROOT}/sysctl.d/99-vpsguard-bbr.conf}"
+BBR_MODULES_FILE="${BBR_MODULES_FILE:-${VPSGUARD_ETC_ROOT}/modules-load.d/vpsguard-bbr.conf}"
+
 GREEN="\033[32m"
 YELLOW="\033[33m"
 CYAN="\033[36m"
 BOLD="\033[1m"
 NC="\033[0m"
-NEW_USER="${NEW_USER:-alex}"
-SSH_PORT="${SSH_PORT:-22}"
-UFW_RESET_ENABLED="${UFW_RESET_ENABLED:-true}"
-VPSGUARD_CONFIG_FILE="/etc/vpsguard/config.env"
 
-load_config_env() {
-  if [ -f "$VPSGUARD_CONFIG_FILE" ]; then
-    # shellcheck disable=SC1090
-    . "$VPSGUARD_CONFIG_FILE"
-  fi
-
-  NEW_USER="${NEW_USER:-alex}"
-  SSH_PORT="${SSH_PORT:-22}"
-  UFW_RESET_ENABLED="${UFW_RESET_ENABLED:-true}"
+section() {
+  printf '\n%b==> %s%b\n' "${CYAN}${BOLD}" "$1" "$NC"
 }
 
-info() {
-  echo -e "${GREEN}[INFO]${NC} $1"
+ok() {
+  printf '%b[OK]%b %s\n' "$GREEN" "$NC" "$1"
 }
 
 warn() {
-  echo -e "${YELLOW}[WARN]${NC} $1"
+  printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "$1"
 }
 
-section() {
-  echo
-  echo -e "${CYAN}${BOLD}==> $1${NC}"
+read_env_value() {
+  local file="$1"
+  local key="$2"
+  local value
+
+  [ -f "$file" ] || return 1
+  value="$(awk -F= -v wanted="$key" '$1 == wanted {sub(/^[^=]*=/, ""); print; exit}' "$file")"
+  [ -n "$value" ] || return 1
+  case "$value" in
+    \'*\') value="${value#\'}"; value="${value%\'}" ;;
+  esac
+  printf '%s\n' "$value"
 }
 
-load_config_env
+ufw_rule_exists_from_text() {
+  local port="$1"
+  awk -v target="${port}/tcp" '$1 == target {found=1} END {exit !found}'
+}
 
-section "System information"
-echo "Hostname: $(hostname)"
-echo "Uptime: $(uptime -p)"
-echo "Kernel: $(uname -r)"
+ufw_tcp_rule_exists() {
+  local port="$1"
+  ufw status 2>/dev/null | ufw_rule_exists_from_text "$port"
+}
 
-section "BBR"
-current_cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
-current_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
-echo "tcp_congestion_control: ${current_cc:-unknown}"
-echo "default_qdisc: ${current_qdisc:-unknown}"
-if [ "$current_cc" = "bbr" ] && [ "$current_qdisc" = "fq" ]; then
-  info "BBR is active"
-else
-  warn "BBR is not fully active"
+sshd_value() {
+  local output="$1"
+  local key="$2"
+  printf '%s\n' "$output" | awk -v wanted="$key" '$1 == wanted {print $2; exit}'
+}
+
+sshd_ports() {
+  local output="$1"
+  printf '%s\n' "$output" | awk '$1 == "port" {ports = ports (ports ? "," : "") $2} END {print ports}'
+}
+
+ssh_listener_present() {
+  local port="$1"
+  local output="$2"
+  printf '%s\n' "$output" | awk -v wanted="$port" '
+    $1 == "LISTEN" {
+      address=$4
+      sub(/^.*:/, "", address)
+      if (address == wanted && ($0 ~ /sshd/ || $0 ~ /systemd/)) found=1
+    }
+    END {exit !found}
+  '
+}
+
+service_state() {
+  local unit="$1"
+  if ! command -v systemctl >/dev/null 2>&1; then
+    printf 'systemd-unavailable\n'
+  elif systemctl is-active --quiet "$unit"; then
+    printf 'active\n'
+  elif systemctl list-unit-files "$unit" --no-legend 2>/dev/null | awk -v wanted="$unit" '$1 == wanted {found=1} END {exit !found}'; then
+    printf 'inactive\n'
+  else
+    printf 'not-found\n'
+  fi
+}
+
+sudo_policy_has_full_admin_from_text() {
+  awk '
+    /^[[:space:]]*\(ALL([[:space:]]*:[[:space:]]*ALL)?\)[[:space:]]+ALL[[:space:]]*$/ {found=1}
+    END {exit !found}
+  '
+}
+
+main() {
+  local managed_user ssh_port original_port install_status user_entry user_home user_shell
+  local authorized_keys sudoers_file effective_sshd listeners available_cc current_cc current_qdisc key_owner
+  local password_state sudo_policy
+  local ssh_socket_state ssh_service_state sshd_service_state ufw_state="inactive"
+  local client_address host_context
+
+  if [ "$(id -u)" -ne 0 ]; then
+    printf 'Please run status.sh as root so it can read protected VPSGuard state.\n' >&2
+    exit 1
+  fi
+
+  if ! managed_user="$(read_env_value "$VPSGUARD_CONFIG_FILE" NEW_USER 2>/dev/null)"; then managed_user=""; fi
+  if ! ssh_port="$(read_env_value "$VPSGUARD_CONFIG_FILE" SSH_PORT 2>/dev/null)"; then ssh_port=""; fi
+  if ! original_port="$(read_env_value "$VPSGUARD_CONFIG_FILE" ORIGINAL_SSH_PORT 2>/dev/null)"; then original_port=""; fi
+  if ! install_status="$(read_env_value "$VPSGUARD_CONFIG_FILE" INSTALL_STATUS 2>/dev/null)"; then install_status=""; fi
+
+  section "VPSGuard"
+  printf 'Version: %s\n' "$VPSGUARD_VERSION"
+  printf 'Install status: %s\n' "${install_status:-not-configured}"
+  printf 'Installed marker: %s\n' "$([ -f "$VPSGUARD_INSTALLED_MARKER" ] && printf present || printf missing)"
+  printf 'Config: %s\n' "$VPSGUARD_CONFIG_FILE"
+  printf 'State: %s\n' "$VPSGUARD_STATE_FILE"
+
+  section "Managed administrator"
+  printf 'Username: %s\n' "${managed_user:-not-configured}"
+  if [ -n "$managed_user" ] && user_entry="$(getent passwd "$managed_user" 2>/dev/null)"; then
+    user_home="$(printf '%s\n' "$user_entry" | awk -F: '{print $6}')"
+    user_shell="$(printf '%s\n' "$user_entry" | awk -F: '{print $7}')"
+    authorized_keys="${user_home}/.ssh/authorized_keys"
+    sudoers_file="${SUDOERS_DIR}/90-vpsguard-${managed_user}"
+    ok "User exists"
+    printf 'Home: %s\nShell: %s\n' "$user_home" "$user_shell"
+    if [ -s "$authorized_keys" ]; then
+      printf 'authorized_keys: present and non-empty (contents hidden)\n'
+      key_owner="$(stat -c '%U:%G' "$authorized_keys" 2>/dev/null || printf unknown)"
+      printf 'authorized_keys owner: %s\n' "$key_owner"
+      printf '.ssh mode: %s\n' "$(stat -c '%a' "${user_home}/.ssh" 2>/dev/null || printf unknown)"
+      printf 'authorized_keys mode: %s\n' "$(stat -c '%a' "$authorized_keys" 2>/dev/null || printf unknown)"
+    else
+      warn "authorized_keys is missing or empty"
+    fi
+    if id -nG "$managed_user" 2>/dev/null | tr ' ' '\n' | grep -Fxq sudo; then
+      ok "User is a member of the sudo group"
+    else
+      warn "User is not a member of the sudo group"
+    fi
+    if ! password_state="$(passwd -S "$managed_user" 2>/dev/null | awk '{print $2}')"; then
+      password_state="unknown"
+    fi
+    if [ "$password_state" = "P" ]; then
+      ok "A sudo authentication password is set"
+    else
+      warn "Password state is ${password_state:-unknown}; standard sudo may be unusable"
+    fi
+    if [ -e "$sudoers_file" ]; then
+      warn "Legacy VPSGuard sudoers override is still present: ${sudoers_file}"
+    else
+      ok "No VPSGuard full-passwordless sudo override is present"
+    fi
+    if visudo -c >/dev/null 2>&1 && sudo_policy="$(LC_ALL=C sudo -l -U "$managed_user" 2>/dev/null)" && printf '%s\n' "$sudo_policy" | sudo_policy_has_full_admin_from_text; then
+      ok "Standard full sudo policy is available through the distribution sudo group"
+    else
+      warn "Standard full sudo policy could not be verified"
+    fi
+    if ! sudo -u "$managed_user" sudo -k >/dev/null 2>&1; then
+      warn "Could not clear the sudo credential cache before the non-interactive check"
+    fi
+    if sudo -u "$managed_user" sudo -n true >/dev/null 2>&1; then
+      warn "Unexpected passwordless sudo access is active"
+    else
+      ok "Non-interactive sudo is denied as expected; sudo -i requires the user password"
+    fi
+  else
+    warn "Managed user does not exist"
+  fi
+
+  section "SSH"
+  client_address="$(printf '%s\n' "${SSH_CONNECTION:-}" | awk 'NF >= 1 {print $1}')"
+  host_context="$(hostname -f 2>/dev/null || hostname)"
+  if [ -n "$managed_user" ] && [ -n "$client_address" ] && effective_sshd="$(sshd -T -C "user=${managed_user},host=${host_context},addr=${client_address}" 2>/dev/null)"; then
+    :
+  else
+    if ! effective_sshd="$(sshd -T 2>/dev/null)"; then effective_sshd=""; fi
+  fi
+  if ! listeners="$(ss -ltnpH 2>/dev/null)"; then listeners=""; fi
+  ssh_socket_state="$(service_state ssh.socket)"
+  ssh_service_state="$(service_state ssh.service)"
+  sshd_service_state="$(service_state sshd.service)"
+  printf 'Expected port: %s\n' "${ssh_port:-not-configured}"
+  printf 'Original port: %s\n' "${original_port:-unknown}"
+  printf 'Effective port(s): %s\n' "$(sshd_ports "$effective_sshd")"
+  if [ -n "$ssh_port" ] && ssh_listener_present "$ssh_port" "$listeners"; then
+    printf 'Target listener: active\n'
+  else
+    printf 'Target listener: missing\n'
+  fi
+  printf 'ssh.socket: %s\nssh.service: %s\nsshd.service: %s\n' "$ssh_socket_state" "$ssh_service_state" "$sshd_service_state"
+  printf 'PermitRootLogin: %s\n' "$(sshd_value "$effective_sshd" permitrootlogin)"
+  printf 'PasswordAuthentication: %s\n' "$(sshd_value "$effective_sshd" passwordauthentication)"
+  printf 'PubkeyAuthentication: %s\n' "$(sshd_value "$effective_sshd" pubkeyauthentication)"
+  printf 'Managed SSH snippet: %s\n' "$([ -f "$VPSGUARD_SSHD_CONFIG" ] && printf present || printf missing)"
+  printf 'Port finalization: %s\n' "$([ -f "$VPSGUARD_PENDING_PORT_MARKER" ] && printf pending || printf complete)"
+  if sshd -t >/dev/null 2>&1; then
+    printf 'sshd syntax: valid\n'
+  else
+    printf 'sshd syntax: invalid\n'
+  fi
+
+  section "UFW"
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | awk 'NR == 1 && tolower($2) == "active" {found=1} END {exit !found}'; then
+    ufw_state="active"
+  fi
+  printf 'State: %s\n' "$ufw_state"
+  if [ -n "$ssh_port" ] && ufw_tcp_rule_exists "$ssh_port"; then
+    printf 'Target SSH rule: present (%s/tcp)\n' "$ssh_port"
+  else
+    printf 'Target SSH rule: missing\n'
+  fi
+  if [ -n "$original_port" ] && [ "$original_port" != "$ssh_port" ]; then
+    if ufw_tcp_rule_exists "$original_port"; then
+      printf 'Old SSH rule: retained (%s/tcp)\n' "$original_port"
+    else
+      printf 'Old SSH rule: absent\n'
+    fi
+  fi
+
+  section "fail2ban"
+  printf 'Service: %s\n' "$(service_state fail2ban.service)"
+  printf 'VPSGuard jail file: %s\n' "$([ -f "$FAIL2BAN_JAIL" ] && printf present || printf missing)"
+  if fail2ban-client status sshd >/dev/null 2>&1; then
+    printf 'sshd jail: active\n'
+  else
+    printf 'sshd jail: unavailable\n'
+  fi
+
+  section "BBR"
+  if ! available_cc="$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null)"; then available_cc=""; fi
+  if ! current_cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"; then current_cc=""; fi
+  if ! current_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null)"; then current_qdisc=""; fi
+  if printf ' %s ' "$available_cc" | grep -Fq ' bbr '; then
+    printf 'Kernel support: supported\n'
+  else
+    printf 'Kernel support: unsupported-or-restricted\n'
+  fi
+  printf 'Available congestion controls: %s\n' "${available_cc:-unknown}"
+  printf 'Current congestion control: %s\n' "${current_cc:-unknown}"
+  printf 'Default qdisc: %s\n' "${current_qdisc:-unknown}"
+  printf 'Persistent sysctl config: %s\n' "$([ -f "$BBR_SYSCTL_FILE" ] && printf present || printf missing)"
+  printf 'modules-load config: %s\n' "$([ -f "$BBR_MODULES_FILE" ] && printf present || printf missing)"
+}
+
+if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+  main "$@"
 fi
-if lsmod 2>/dev/null | grep -q '^tcp_bbr'; then
-  info "tcp_bbr module is loaded"
-else
-  warn "tcp_bbr module is not loaded"
-fi
-
-section "VPSGuard config"
-echo "Config file: ${VPSGUARD_CONFIG_FILE}"
-echo "NEW_USER: ${NEW_USER}"
-echo "SSH_PORT: ${SSH_PORT}"
-echo "UFW_RESET_ENABLED: ${UFW_RESET_ENABLED}"
-
-section "OS"
-grep -E "PRETTY_NAME|VERSION_ID|VERSION=" /etc/os-release || true
-
-section "User ${NEW_USER}"
-id "${NEW_USER}" || warn "User ${NEW_USER} does not exist."
-
-section "Sudo group"
-getent group sudo || true
-
-section "SSH effective configuration"
-sshd -T 2>/dev/null | grep -Ei "^(port|permitrootlogin|passwordauthentication|kbdinteractiveauthentication|pubkeyauthentication|permitemptypasswords|x11forwarding)" || true
-
-section "UFW status"
-ufw status verbose || warn "UFW is not available or not active."
-
-section "fail2ban sshd status"
-fail2ban-client status sshd || warn "fail2ban sshd jail is not available."
-
-section "Listening ports"
-ss -tulpn
-
-section "VPSGuard status check completed"

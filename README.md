@@ -1,206 +1,39 @@
-# VPSGuard
+# VPSGuard v0.3.5
 
-VPSGuard is a one-click Ubuntu LTS VPS initialization and SSH security hardening tool.
+VPSGuard 是面向 Ubuntu LTS 新 VPS 的 Bash 初始化与 SSH 安全加固工具。它创建或复用一个由用户明确指定的管理员账户，配置 SSH 公钥、sudo、UFW、fail2ban，并在内核支持时启用 Linux 原生 BBR。
 
-It is designed for a brand-new VPS after the first root login.
+VPSGuard 不安装第三方内核，不自动重启服务器，也不会在卸载时无条件关闭整套防火墙或 fail2ban。
 
-## What VPSGuard Does
+## 主要功能
 
-- Checks Ubuntu LTS system compatibility
-- Updates system packages
-- Installs basic server tools
-- Enables BBR network acceleration by default when supported by the kernel
-- Creates a new sudo user: `alex` by default
-- Copies root SSH public keys to the new sudo user
-- Tests sudo permission
-- Installs and configures UFW firewall
-- Allows only the current SSH port by default
-- Installs and configures fail2ban
-- Disables root SSH login
-- Disables SSH password login
-- Keeps SSH key login enabled
+- 安装时必须手动填写管理员用户名，不存在隐藏默认用户名
+- 复用已有普通用户时保留密码、home、现有公钥和用户文件
+- 使用发行版标准 `sudo` 组和用户密码提供完整管理员权限
+- 在 SSH 加固前验证公钥、sudo 策略、密码状态，并实际验证一次密码认证
+- 使用 `/etc/ssh/sshd_config.d/00-vpsguard.conf` 管理独立 SSH 配置
+- 使用 `sshd -t` 和 `sshd -T` 验证语法及最终生效值
+- 支持 `ssh.socket`、`ssh.service`、`sshd.service` 和传统 service 模式
+- 精确验证 SSH 监听端口及 UFW TCP 规则
+- 更换端口时保留旧监听和旧规则，直到第二终端登录被明确确认
+- 默认尝试启用发行版内核自带的 `fq + bbr`
+- 每次重跑检查真实状态并收敛，不再只根据 phase 标记跳过
+- 卸载只处理可识别的 VPSGuard 文件和记录过的规则
 
-## Supported System
+## Ubuntu 状态
 
-Ubuntu LTS only.
+| Ubuntu | 当前状态 | 说明 |
+| --- | --- | --- |
+| 22.04 LTS | 静态与 mock 测试目标 | 尚未在本次升级中进行真实 VPS 安装/卸载验证 |
+| 24.04 LTS | 静态与 mock 测试目标 | 包含 `ssh.socket` 路径测试；真实远程切换仍待临时 VPS 验证 |
+| 26.04 LTS | Experimental / 待验证 | 官方已发布，但当前没有 GitHub-hosted 26.04 runner，也未做真实 VPS 验证 |
 
-Recommended:
+“静态与 mock 测试目标”不等于生产环境验证。首次使用 v0.3.5 时，建议选择带云控制台的临时 VPS。
 
-- Ubuntu 22.04 LTS
-- Ubuntu 24.04 LTS
+## 运行前准备 SSH 公钥
 
-## Configuration File
+运行前，root 的 `/root/.ssh/authorized_keys` 必须包含至少一个可用公钥。不要把私钥上传到 VPS。
 
-VPSGuard stores its runtime config in `/etc/vpsguard/config.env`.
-
-Default values:
-
-- `NEW_USER=alex`
-- `SSH_PORT=22`
-- `UFW_RESET_ENABLED=true`
-
-You can edit this file before re-running VPSGuard to standardize the same values across install, status, and uninstall flows.
-
-## Idempotent Re-run Behavior
-
-VPSGuard is designed to be safe to re-run.
-
-- Existing users are reused.
-- Existing SSH key entries are merged without duplicates.
-- Existing sudoers rules are replaced in-place.
-- The new user can run `sudo -i` without a password.
-- Existing UFW rules are preserved when already initialized.
-- State markers are stored under `/etc/vpsguard/`.
-
-## 配置文件
-
-VPSGuard 会把运行时配置保存到 `/etc/vpsguard/config.env`。
-
-默认值如下：
-
-- `NEW_USER=alex`
-- `SSH_PORT=22`
-- `UFW_RESET_ENABLED=true`
-
-你可以在重新运行 VPSGuard 之前先修改这个文件，让安装、状态检查和卸载都使用同一套配置。
-
-## 幂等重跑
-
-VPSGuard 设计为可以安全重复运行。
-
-- 已存在的用户会直接复用。
-- SSH 公钥会合并，避免重复。
-- sudoers 规则会原地更新，不会叠加重复项。
-- 新用户可以免密执行 `sudo -i`。
-- 已初始化的 UFW 规则会保留。
-- 内核支持时会默认开启 BBR 加速。
-- 状态标记保存在 `/etc/vpsguard/`。
-
----
-
-# SSH Key Preparation Before Running VPSGuard
-
-> Important: VPSGuard expects the root account to already have at least one SSH public key in `/root/.ssh/authorized_keys` before the script runs.
-
-Before running VPSGuard on a brand-new VPS, make sure SSH key login is ready.
-
-Key rules:
-
-- The Private Key / private key stays on your local computer, phone, or Termius.
-- The Public Key / public key is copied to the VPS.
-- Never paste or upload your Private Key / private key to the VPS.
-- VPSGuard requires `/root/.ssh/authorized_keys` to already exist and contain at least one SSH public key.
-- VPSGuard copies root's existing SSH public key to the new sudo user created by the script.
-- After installation, log in as the new user with the same private key.
-
-## macOS / Linux Local Terminal
-
-Generate an SSH key if you do not already have one:
-
-```bash
-ssh-keygen -t ed25519 -C "vpsguard"
-```
-
-Show your public key:
-
-```bash
-cat ~/.ssh/id_ed25519.pub
-```
-
-Copy the public key to the new VPS if `ssh-copy-id` is available:
-
-```bash
-ssh-copy-id -i ~/.ssh/id_ed25519.pub root@YOUR_SERVER_IP
-```
-
-If `ssh-copy-id` is not available, log in as root with the initial VPS password:
-
-```bash
-ssh root@YOUR_SERVER_IP
-```
-
-Then create and edit `/root/.ssh/authorized_keys`:
-
-```bash
-mkdir -p /root/.ssh
-chmod 700 /root/.ssh
-nano /root/.ssh/authorized_keys
-chmod 600 /root/.ssh/authorized_keys
-```
-
-One-line append example:
-
-```bash
-mkdir -p /root/.ssh && chmod 700 /root/.ssh && echo 'PASTE_YOUR_PUBLIC_KEY_HERE' >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
-```
-
-Replace `PASTE_YOUR_PUBLIC_KEY_HERE` with your real public key, not your private key.
-
-## Termius
-
-1. Open Termius.
-2. Go to Keychain.
-3. Select or create an SSH Key.
-4. Copy the Public Key, not the Private Key.
-5. Create a new Host for the VPS.
-6. Log in as root using the initial VPS password.
-7. Add the Public Key to `/root/.ssh/authorized_keys`.
-8. Change the Host authentication method to Key.
-9. Select the same Termius private key.
-10. Test root key login before running VPSGuard.
-
-## SSH Key Setup for VPSGuard
-
-VPSGuard is a VPS bootstrap tool. It may grant elevated sudo access to the new user for automation purposes.
-
-Secure usage requires key-based login:
-
-- Generate an SSH key on your local machine.
-- Add the public key to `/root/.ssh/authorized_keys` before running VPSGuard.
-- Log in with the same private key after installation.
-
-### Windows PowerShell
-
-Generate a key pair:
-
-```powershell
-ssh-keygen -t ed25519 -C "vpsguard"
-```
-
-Show the public key:
-
-```powershell
-Get-Content $env:USERPROFILE\.ssh\id_ed25519.pub
-```
-
-Copy the public key to the VPS:
-
-```powershell
-type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh root@YOUR_SERVER_IP "mkdir -p /root/.ssh && cat >> /root/.ssh/authorized_keys"
-```
-
-If you prefer manual setup, log in as root and append the public key to `/root/.ssh/authorized_keys`, then run `chmod 600 /root/.ssh/authorized_keys`.
-
----
-
-# 运行 VPSGuard 前的 SSH 密钥准备
-
-> 重要：运行 VPSGuard 之前，root 账户的 `/root/.ssh/authorized_keys` 里必须已经有至少一个 SSH 公钥。
-
-在一台全新的 VPS 上运行 VPSGuard 之前，请先确认 SSH 密钥登录已经准备好。
-
-关键规则：
-
-- Private Key / 私钥保留在你的本地电脑、手机或 Termius 里。
-- Public Key / 公钥复制到 VPS。
-- 绝对不要把 Private Key / 私钥粘贴或上传到 VPS。
-- VPSGuard 运行前要求 `/root/.ssh/authorized_keys` 已经存在，并且里面至少有一个 SSH 公钥。
-- VPSGuard 会把 root 账户已有的 SSH 公钥复制给脚本创建的新 sudo 用户。
-- 安装完成后，用户应该使用新用户和同一个私钥登录。
-
-## macOS / Linux 本地终端
-
-如果你还没有 SSH Key，可以生成一个：
+macOS、Linux 或 Windows OpenSSH 可以生成 Ed25519 密钥：
 
 ```bash
 ssh-keygen -t ed25519 -C "vpsguard"
@@ -212,19 +45,7 @@ ssh-keygen -t ed25519 -C "vpsguard"
 cat ~/.ssh/id_ed25519.pub
 ```
 
-如果本地支持 `ssh-copy-id`，可以直接复制公钥到新 VPS：
-
-```bash
-ssh-copy-id -i ~/.ssh/id_ed25519.pub root@YOUR_SERVER_IP
-```
-
-如果没有 `ssh-copy-id`，先用 VPS 初始 root 密码登录：
-
-```bash
-ssh root@YOUR_SERVER_IP
-```
-
-然后创建并编辑 `/root/.ssh/authorized_keys`：
+将 `.pub` 公钥内容添加到 VPS：
 
 ```bash
 mkdir -p /root/.ssh
@@ -233,203 +54,239 @@ nano /root/.ssh/authorized_keys
 chmod 600 /root/.ssh/authorized_keys
 ```
 
-也可以用一行命令追加公钥：
+先确认 root 公钥登录可用，再运行 VPSGuard。
+
+## 交互式安装
+
+以 root 运行：
 
 ```bash
-mkdir -p /root/.ssh && chmod 700 /root/.ssh && echo 'PASTE_YOUR_PUBLIC_KEY_HERE' >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
+bash <(curl -fsSL https://raw.githubusercontent.com/hcloudlab/vpsguard/main/install.sh)
 ```
 
-请把 `PASTE_YOUR_PUBLIC_KEY_HERE` 替换成你的真实公钥，不是私钥。
-
-## Termius 操作步骤
-
-1. 打开 Termius。
-2. 进入 Keychain。
-3. 选择已有 SSH Key，或新建一个 SSH Key。
-4. 复制 Public Key，不要复制 Private Key。
-5. 新建 VPS Host。
-6. 先用 VPS 初始 root 密码登录。
-7. 把 Public Key 添加到 `/root/.ssh/authorized_keys`。
-8. 把 Host 的认证方式改成 Key。
-9. 选择对应的 Termius 私钥。
-10. 确认 root 可以使用密钥登录后，再运行 VPSGuard。
-
-## VPSGuard 的 SSH 密钥准备
-
-VPSGuard 是一个 VPS 初始化工具。为了完成自动化操作，它可能会给新建用户配置较高的 sudo 权限。
-
-安全使用必须采用密钥登录：
-
-- 在本地电脑先生成 SSH 密钥。
-- 在运行 VPSGuard 之前，把公钥写入 `/root/.ssh/authorized_keys`。
-- 安装完成后，继续使用同一把私钥登录。
-
-### Windows PowerShell
-
-生成密钥对：
-
-```powershell
-ssh-keygen -t ed25519 -C "vpsguard"
-```
-
-查看公钥：
-
-```powershell
-Get-Content $env:USERPROFILE\.ssh\id_ed25519.pub
-```
-
-把公钥复制到 VPS：
-
-```powershell
-type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh root@YOUR_SERVER_IP "mkdir -p /root/.ssh && cat >> /root/.ssh/authorized_keys"
-```
-
-如果你想手动操作，可以先用 root 登录，然后把公钥追加到 `/root/.ssh/authorized_keys`，最后执行 `chmod 600 /root/.ssh/authorized_keys`。
-
----
-
-# One-click Deployment
-
-Run the command below as root only after your SSH public key has been added to `/root/.ssh/authorized_keys`.
-
-curl version:
+或：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/hexa46656-creator/vpsguard/main/install.sh)
+bash <(wget -qO- https://raw.githubusercontent.com/hcloudlab/vpsguard/main/install.sh)
 ```
 
-wget version:
+首次安装会提示：
 
-```bash
-bash <(wget -qO- https://raw.githubusercontent.com/hexa46656-creator/vpsguard/main/install.sh)
+```text
+请输入要创建的管理员用户名：
 ```
 
----
+直接回车不会采用默认值。用户名必须：
 
-# 一键部署
+- 使用小写字母或下划线开头
+- 后续只包含小写字母、数字、下划线或连字符
+- 总长度不超过 32 个字符
+- 不能是 `root` 或已知系统账户
 
-只有在你已经把 SSH 公钥添加到 `/root/.ssh/authorized_keys` 之后，才使用 root 运行下面的一键部署命令。
+如果用户已存在，脚本会显示现状并要求确认；不会删除用户、重置密码或覆盖现有公钥，而是只合并缺失的公钥和配置。
 
-curl 版本：
+新建管理员时，VPSGuard 会要求为该账户设置一个强密码，并在修改 SSH 前要求输入一次该密码验证 sudo。SSH 本身仍只允许公钥登录；这个密码只用于登录后执行 `sudo`。
+
+## sudo 权限模型
+
+v0.3.5 使用标准管理员模型：
+
+- 管理用户加入 Ubuntu 的 `sudo` 组；
+- 完整 sudo 通过用户密码认证；
+- 不创建 `NOPASSWD: ALL`；
+- 不提供受限免密命令；
+- `sudo -n` 应失败，`sudo -i` 会提示输入管理用户密码。
+
+从旧版重跑时，只有确认用户属于 `sudo` 组并已经设置密码后，才会移除 VPSGuard 可识别的旧全免密 sudoers 文件。未知 sudoers 文件不会被改写。
+
+## 参数化安装
+
+先下载脚本，再通过经过校验的环境变量运行：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/hexa46656-creator/vpsguard/main/install.sh)
+curl -fsSLo /tmp/vpsguard-install.sh \
+  https://raw.githubusercontent.com/hcloudlab/vpsguard/main/install.sh
+sudo -E env NEW_USER=myadmin bash /tmp/vpsguard-install.sh
 ```
 
-wget 版本：
+指定目标 SSH 端口：
 
 ```bash
-bash <(wget -qO- https://raw.githubusercontent.com/hexa46656-creator/vpsguard/main/install.sh)
+sudo -E env NEW_USER=myadmin SSH_PORT=2222 bash /tmp/vpsguard-install.sh
 ```
 
----
+`NEW_USER` 和 `SSH_PORT` 可以通过参数提供，但 sudo 密码设置及首次认证必须通过可信终端完成。没有 TTY 时：
 
-# After Installation Login
+- 不会创建一个无密码的新管理员；
+- 新用户应先由管理员通过控制台创建、加入 `sudo` 组并设置密码；
+- 即使现有用户已有密码，首次 VPSGuard 安装仍要求终端完成实际 sudo 密码认证。
 
-After VPSGuard finishes, do not keep using root login. Log in with the new sudo user:
+这项门禁不能通过环境变量传入密码绕过，避免密码进入进程列表、Shell 历史或日志。
 
-```bash
-ssh alex@YOUR_SERVER_IP -p 22
+## 重跑与更换管理用户
+
+统一配置保存在：
+
+```text
+/etc/vpsguard/config.env
 ```
 
-For Termius after installation:
+配置文件由 root 拥有，权限为 `600`。`install.sh`、`status.sh` 和 `uninstall.sh` 都读取这一个来源，但不会直接 `source` 未验证数据。
 
-- Host username: `alex`
-- Authentication: `Key`
-- Selected Key: the same private key whose public key was added before running VPSGuard.
-- Do not use root login.
-- Do not use password login.
+交互式重跑会提供：
 
-Test passwordless sudo after logging in:
+```text
+1. 继续使用
+2. 更换管理用户
+3. 取消
+```
+
+更换管理用户不会删除旧用户或旧用户数据。新用户必须完成公钥和 sudo 验证后，SSH 加固才会继续。
+
+## SSH 端口切换安全门禁
+
+当目标端口与旧端口不同，VPSGuard 会：
+
+1. 记录旧端口；
+2. 精确放行新、旧两个 UFW 端口；
+3. 让 SSH 临时同时监听新旧端口；
+4. 使用 `sshd -t`、`sshd -T` 和 `ss -ltnp` 验证；
+5. 输出第二终端测试命令；
+6. 只有输入大写 `YES` 后才结束旧监听；
+7. 只删除由 VPSGuard 自己添加并记录的旧 UFW 规则。
+
+第二终端测试示例：
 
 ```bash
+ssh -p 2222 myadmin@SERVER_IP
 sudo -i
 ```
 
-Expected output:
+`sudo -i` 应提示输入 `myadmin` 的用户密码。`sudo -n -i` 成功反而表示系统仍存在其他免密 sudo 规则，应先调查。
 
-A root shell prompt should open without a password prompt.
+如果没有输入 `YES`，安装状态会成为：
 
----
-
-# 安装后登录
-
-VPSGuard 安装完成后，不要继续使用 root 登录。请使用新 sudo 用户登录：
-
-```bash
-ssh alex@YOUR_SERVER_IP -p 22
+```text
+pending-port-finalization
 ```
 
-Termius 安装后设置：
+旧端口会继续保留。这不是安装失败；确认外部登录后重新运行 VPSGuard 即可完成第二阶段。不要提前关闭当前 SSH 会话。
 
-- 用户名改成 `alex`
-- 认证方式选择 `Key`
-- 选择之前添加公钥时对应的同一个私钥
-- 不要使用 root 登录
-- 不要使用密码登录
+## BBR
 
-登录后测试免密 sudo：
+VPSGuard 默认尝试启用 Linux 原生 BBR：
 
-```bash
-sudo -i
+```text
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
 ```
 
-预期输出：
+管理文件：
 
-无需输入密码即可看到 UFW 状态输出。
-
----
-
-## Custom User
-
-If you want to use another username:
-
-```bash
-NEW_USER=deploy bash install.sh
+```text
+/etc/sysctl.d/99-vpsguard-bbr.conf
+/etc/modules-load.d/vpsguard-bbr.conf  # 仅在 tcp_bbr 作为已加载模块时需要
 ```
 
-## Custom SSH Port
+BBR 状态分为：
 
-VPSGuard automatically detects the current SSH port.
+- `enabled`
+- `already-enabled`
+- `unsupported`
+- `failed`
 
-You can also specify it manually:
+OpenVZ、容器、受限 VPS 或不支持 BBR 的发行版内核可能显示 `unsupported`。这不会触发第三方内核安装，也不会阻止核心 SSH 安装。
 
-```bash
-SSH_PORT=22 bash install.sh
-```
-
-## Check Status
-
-```bash
-bash status.sh
-```
-
-Check BBR manually:
+检查真实状态：
 
 ```bash
-sysctl net.ipv4.tcp_congestion_control net.core.default_qdisc
-lsmod | grep bbr
+sysctl net.ipv4.tcp_available_congestion_control
+sysctl net.ipv4.tcp_congestion_control
+sysctl net.core.default_qdisc
 ```
 
-## Uninstall
+BBR 不保证降低物理延迟、消除丢包或让所有线路提速。
+
+## 状态检查
 
 ```bash
-bash uninstall.sh
+sudo bash status.sh
 ```
 
-## Important Warning
+状态脚本会显示：
 
-Do not close your current root SSH session immediately after running VPSGuard.
+- VPSGuard 版本、配置和安装状态
+- 管理用户、home、shell、sudo 组、密码状态、sudo 策略和公钥权限状态
+- SSH 期望端口、有效端口、实际监听和 systemd unit 状态
+- root/password/public-key 登录最终有效值
+- UFW 新旧端口规则
+- fail2ban 服务和 VPSGuard jail
+- BBR 支持、可用算法、当前算法、qdisc 和持久化文件
 
-Open a new terminal window and test the new sudo user login first:
+它不会输出完整公钥、密码、Token 或私钥。
+
+## 安装前状态与管理文件
+
+VPSGuard 首次修改系统前会记录：
+
+```text
+/etc/vpsguard/state.env
+/etc/vpsguard/managed-rules
+```
+
+独立管理文件包括：
+
+```text
+/etc/ssh/sshd_config.d/00-vpsguard.conf
+/etc/fail2ban/jail.d/vpsguard-sshd.local
+/etc/sysctl.d/99-vpsguard-bbr.conf
+/etc/modules-load.d/vpsguard-bbr.conf
+```
+
+VPSGuard 不删除未知 SSH 片段、未知 fail2ban jail 或其他软件的 BBR 配置。
+
+## 安全卸载
 
 ```bash
-ssh alex@YOUR_SERVER_IP -p 22
-sudo whoami
+sudo bash uninstall.sh
 ```
 
-Only close the root session after confirming that the new user login works.
+必须输入：
 
-## License
+```text
+UNINSTALL
+```
 
-MIT
+卸载行为：
+
+- 不删除管理员用户、home、authorized_keys 或用户文件
+- 不执行全局 `ufw disable` 或 `ufw reset`
+- 不停止或禁用整套 fail2ban
+- 只删除可识别的 VPSGuard 管理文件
+- 安全移除可识别的旧 VPSGuard 全免密 sudoers 文件；无法证明标准 sudo 可用时会恢复并保留
+- 只考虑删除记录过的 UFW 规则，并始终保留当前 SSH 端口规则
+- SSH 端口已改变或仍待确认时，保留 SSH 片段和状态，避免远程失联
+- 删除 BBR 持久化文件时不强制切换拥塞算法、不重启 VPS
+
+安全条件不足时会返回部分卸载，并保留必要状态供人工处理。
+
+## 本地开发验证
+
+测试只使用临时目录、纯函数和命令 stub，不操作真实 `/etc`、SSH、UFW、systemd、用户或 sysctl：
+
+```bash
+bash -n install.sh
+bash -n status.sh
+bash -n uninstall.sh
+shellcheck -x install.sh status.sh uninstall.sh tests/*.sh
+bash tests/run.sh
+```
+
+GitHub Actions 在 Ubuntu 22.04 和 24.04 runner 上执行同样的静态与隔离测试，不进行真实远程 SSH 联调。
+
+## 版本与许可
+
+- 当前版本：`0.3.5`
+- 更新记录：[CHANGELOG.md](CHANGELOG.md)
+- 许可：[MIT](LICENSE)
+- 仓库：[github.com/hcloudlab/vpsguard](https://github.com/hcloudlab/vpsguard)

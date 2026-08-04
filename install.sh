@@ -1,560 +1,1042 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# VPSGuard
-# One-click Ubuntu LTS VPS initialization and SSH security hardening tool.
-# Default user: alex
-# Supported OS: Ubuntu LTS only
+# VPSGuard v0.3.5
+# Ubuntu LTS initialization and SSH hardening with lockout-safe convergence.
 
-NEW_USER="${NEW_USER:-alex}"
-SSH_PORT="${SSH_PORT:-}"
-UFW_RESET_ENABLED="${UFW_RESET_ENABLED:-true}"
-SSHD_CONFIG="/etc/ssh/sshd_config"
-SSHD_BACKUP_FILE=""
-FAIL2BAN_JAIL="/etc/fail2ban/jail.d/sshd.local"
-VPSGUARD_STATE_DIR="/etc/vpsguard"
-VPSGUARD_CONFIG_FILE="/etc/vpsguard/config.env"
-VPSGUARD_INSTALLED_MARKER="/etc/vpsguard/.installed"
-VPSGUARD_SSH_DONE_MARKER="/etc/vpsguard/.ssh_done"
-VPSGUARD_SUDO_DONE_MARKER="/etc/vpsguard/.sudo_done"
-VPSGUARD_UFW_DONE_MARKER="/etc/vpsguard/.ufw_done"
+VPSGUARD_VERSION="0.3.5"
+VPSGUARD_TEST_MODE="${VPSGUARD_TEST_MODE:-0}"
+VPSGUARD_ETC_ROOT="${VPSGUARD_ETC_ROOT:-/etc}"
+VPSGUARD_RUN_ROOT="${VPSGUARD_RUN_ROOT:-/run}"
+VPSGUARD_LOG_FILE="${VPSGUARD_LOG_FILE:-/var/log/vpsguard.log}"
+VPSGUARD_STATE_DIR="${VPSGUARD_STATE_DIR:-${VPSGUARD_ETC_ROOT}/vpsguard}"
+VPSGUARD_CONFIG_FILE="${VPSGUARD_CONFIG_FILE:-${VPSGUARD_STATE_DIR}/config.env}"
+VPSGUARD_STATE_FILE="${VPSGUARD_STATE_FILE:-${VPSGUARD_STATE_DIR}/state.env}"
+VPSGUARD_MANAGED_RULES="${VPSGUARD_MANAGED_RULES:-${VPSGUARD_STATE_DIR}/managed-rules}"
+VPSGUARD_INSTALLED_MARKER="${VPSGUARD_INSTALLED_MARKER:-${VPSGUARD_STATE_DIR}/.installed}"
+VPSGUARD_PENDING_PORT_MARKER="${VPSGUARD_PENDING_PORT_MARKER:-${VPSGUARD_STATE_DIR}/.pending-port-finalization}"
+
+SSHD_CONFIG="${SSHD_CONFIG:-${VPSGUARD_ETC_ROOT}/ssh/sshd_config}"
+SSHD_CONFIG_DIR="${SSHD_CONFIG_DIR:-${VPSGUARD_ETC_ROOT}/ssh/sshd_config.d}"
+VPSGUARD_SSHD_CONFIG="${VPSGUARD_SSHD_CONFIG:-${SSHD_CONFIG_DIR}/00-vpsguard.conf}"
+FAIL2BAN_JAIL="${FAIL2BAN_JAIL:-${VPSGUARD_ETC_ROOT}/fail2ban/jail.d/vpsguard-sshd.local}"
+SUDOERS_DIR="${SUDOERS_DIR:-${VPSGUARD_ETC_ROOT}/sudoers.d}"
+BBR_SYSCTL_FILE="${BBR_SYSCTL_FILE:-${VPSGUARD_ETC_ROOT}/sysctl.d/99-vpsguard-bbr.conf}"
+BBR_MODULES_FILE="${BBR_MODULES_FILE:-${VPSGUARD_ETC_ROOT}/modules-load.d/vpsguard-bbr.conf}"
+ROOT_AUTHORIZED_KEYS="${ROOT_AUTHORIZED_KEYS:-/root/.ssh/authorized_keys}"
+
+REQUESTED_NEW_USER="${NEW_USER:-}"
+REQUESTED_SSH_PORT="${SSH_PORT:-}"
+NEW_USER=""
+PREVIOUS_MANAGED_USER=""
+SSH_PORT=""
+ORIGINAL_SSH_PORT=""
+INSTALL_STATUS="failed"
+BBR_STATUS="unsupported"
+SSH_RUNTIME_MODE="unknown"
+SSH_SERVICE_UNIT=""
 
 GREEN="\033[32m"
 YELLOW="\033[33m"
 RED="\033[31m"
-BLUE="\033[34m"
-CYAN="\033[36m"
-MAGENTA="\033[35m"
 BOLD="\033[1m"
 NC="\033[0m"
 
+log_plain() {
+  local level="$1"
+  local message="$2"
+
+  if [ "$VPSGUARD_TEST_MODE" = "1" ]; then
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$VPSGUARD_LOG_FILE")"
+  printf '%s [%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$level" "$message" >> "$VPSGUARD_LOG_FILE"
+  chmod 600 "$VPSGUARD_LOG_FILE"
+}
+
 info() {
-  echo -e "${GREEN}[INFO]${NC} $1"
+  printf '%b[INFO]%b %s\n' "$GREEN" "$NC" "$1"
+  log_plain INFO "$1"
 }
 
 warn() {
-  echo -e "${YELLOW}[WARN]${NC} $1"
+  printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "$1"
+  log_plain WARN "$1"
 }
 
 error() {
-  echo -e "${RED}[ERROR]${NC} $1"
+  printf '%b[ERROR]%b %s\n' "$RED" "$NC" "$1" >&2
+  log_plain ERROR "$1"
   exit 1
 }
 
-ensure_state_dir() {
-  mkdir -p "$VPSGUARD_STATE_DIR"
-}
+ensure_directory() {
+  local path="$1"
+  local mode="${2:-700}"
 
-load_config_env() {
-  if [ -f "$VPSGUARD_CONFIG_FILE" ]; then
-    # shellcheck disable=SC1090
-    . "$VPSGUARD_CONFIG_FILE"
+  mkdir -p "$path"
+  chmod "$mode" "$path"
+  if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+    chown root:root "$path"
   fi
-
-  NEW_USER="${NEW_USER:-alex}"
-  SSH_PORT="${SSH_PORT:-22}"
-  UFW_RESET_ENABLED="${UFW_RESET_ENABLED:-true}"
 }
 
-write_config_value() {
-  local key="$1"
-  local value="$2"
+atomic_write() {
+  local path="$1"
+  local mode="$2"
+  local content="$3"
+  local directory
+  local temporary_file
 
-  if grep -q "^${key}=" "$VPSGUARD_CONFIG_FILE" 2>/dev/null; then
-    sed -i -E "s|^${key}=.*|${key}=${value}|" "$VPSGUARD_CONFIG_FILE"
+  directory="$(dirname "$path")"
+  if [ ! -d "$directory" ]; then
+    mkdir -p "$directory"
+    chmod 755 "$directory"
+    if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+      chown root:root "$directory"
+    fi
+  fi
+  temporary_file="$(mktemp "${path}.tmp.XXXXXX")"
+  printf '%s' "$content" > "$temporary_file"
+  chmod "$mode" "$temporary_file"
+  if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+    chown root:root "$temporary_file"
+  fi
+  mv -f "$temporary_file" "$path"
+}
+
+assert_managed_or_absent() {
+  local path="$1"
+  if [ -e "$path" ] && ! head -n 1 "$path" | grep -Fq 'Managed by VPSGuard'; then
+    error "Refusing to overwrite an unrecognized existing file: ${path}"
+  fi
+}
+
+read_env_value() {
+  local file="$1"
+  local key="$2"
+  local value
+
+  [ -f "$file" ] || return 1
+  value="$(awk -F= -v wanted="$key" '$1 == wanted {sub(/^[^=]*=/, ""); print; exit}' "$file")"
+  [ -n "$value" ] || return 1
+
+  case "$value" in
+    \'*\')
+      value="${value#\'}"
+      value="${value%\'}"
+      ;;
+  esac
+
+  printf '%s\n' "$value"
+}
+
+write_config_env() {
+  local content
+
+  content="# Managed by VPSGuard ${VPSGUARD_VERSION}; values are validated before use.
+NEW_USER='${NEW_USER}'
+SSH_PORT='${SSH_PORT}'
+ORIGINAL_SSH_PORT='${ORIGINAL_SSH_PORT}'
+INSTALL_STATUS='${INSTALL_STATUS}'
+"
+  atomic_write "$VPSGUARD_CONFIG_FILE" 600 "$content"
+}
+
+boolean_command_state() {
+  if "$@" >/dev/null 2>&1; then
+    printf 'true\n'
   else
-    printf '%s=%s\n' "$key" "$value" >> "$VPSGUARD_CONFIG_FILE"
+    printf 'false\n'
   fi
 }
 
-persist_config_env() {
-  ensure_state_dir
-  if [ ! -f "$VPSGUARD_CONFIG_FILE" ]; then
-    printf '%s\n' "# VPSGuard config" > "$VPSGUARD_CONFIG_FILE"
+record_preinstall_state() {
+  local ufw_installed ufw_active fail2ban_installed fail2ban_active fail2ban_enabled
+  local sshd_dropin_preexisting fail2ban_jail_preexisting bbr_sysctl_preexisting bbr_modules_preexisting
+  local content
+
+  if [ -f "$VPSGUARD_STATE_FILE" ]; then
+    info "Pre-install state already recorded; preserving the original snapshot."
+    return 0
   fi
 
-  write_config_value "NEW_USER" "$NEW_USER"
-  write_config_value "SSH_PORT" "$SSH_PORT"
-  write_config_value "UFW_RESET_ENABLED" "$UFW_RESET_ENABLED"
-  chmod 600 "$VPSGUARD_CONFIG_FILE"
+  ufw_installed="$(boolean_command_state command -v ufw)"
+  fail2ban_installed="$(boolean_command_state command -v fail2ban-client)"
+  ufw_active="false"
+  fail2ban_active="false"
+  fail2ban_enabled="false"
+
+  if [ "$ufw_installed" = "true" ] && ufw status 2>/dev/null | awk 'NR == 1 && tolower($2) == "active" {found=1} END {exit !found}'; then
+    ufw_active="true"
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    fail2ban_active="$(boolean_command_state systemctl is-active --quiet fail2ban.service)"
+    fail2ban_enabled="$(boolean_command_state systemctl is-enabled --quiet fail2ban.service)"
+  fi
+
+  sshd_dropin_preexisting="$(boolean_command_state test -e "$VPSGUARD_SSHD_CONFIG")"
+  fail2ban_jail_preexisting="$(boolean_command_state test -e "$FAIL2BAN_JAIL")"
+  bbr_sysctl_preexisting="$(boolean_command_state test -e "$BBR_SYSCTL_FILE")"
+  bbr_modules_preexisting="$(boolean_command_state test -e "$BBR_MODULES_FILE")"
+
+  content="# VPSGuard pre-install state. Parsed as data; never sourced.
+UFW_INSTALLED='${ufw_installed}'
+UFW_ACTIVE='${ufw_active}'
+FAIL2BAN_INSTALLED='${fail2ban_installed}'
+FAIL2BAN_ACTIVE='${fail2ban_active}'
+FAIL2BAN_ENABLED='${fail2ban_enabled}'
+SSHD_DROPIN_PREEXISTED='${sshd_dropin_preexisting}'
+FAIL2BAN_JAIL_PREEXISTED='${fail2ban_jail_preexisting}'
+BBR_SYSCTL_PREEXISTED='${bbr_sysctl_preexisting}'
+BBR_MODULES_PREEXISTED='${bbr_modules_preexisting}'
+"
+  atomic_write "$VPSGUARD_STATE_FILE" 600 "$content"
+  atomic_write "$VPSGUARD_MANAGED_RULES" 600 "# UFW rules added by VPSGuard
+"
+  info "Recorded pre-install service and managed-file state."
 }
 
 require_root() {
   if [ "$(id -u)" -ne 0 ]; then
-    error "Please run this script as root."
+    error "Please run VPSGuard as root."
   fi
 }
 
 check_ubuntu_lts() {
-  if [ ! -f /etc/os-release ]; then
-    error "Cannot detect OS. /etc/os-release not found."
-  fi
+  local os_release="${VPSGUARD_ETC_ROOT}/os-release"
 
-  # shellcheck disable=SC1091
-  . /etc/os-release
-
-  if [ "${ID:-}" != "ubuntu" ]; then
-    error "Unsupported OS: ${PRETTY_NAME:-unknown}. VPSGuard supports Ubuntu LTS only."
-  fi
-
-  if ! echo "${VERSION:-}" | grep -qi "LTS"; then
-    error "Unsupported Ubuntu version: ${PRETTY_NAME:-unknown}. Please use Ubuntu LTS."
-  fi
-
-  info "Detected supported OS: ${PRETTY_NAME}"
+  [ -f "$os_release" ] || error "Cannot detect Ubuntu: ${os_release} is missing."
+  # shellcheck disable=SC1090
+  . "$os_release"
+  [ "${ID:-}" = "ubuntu" ] || error "Unsupported OS: ${PRETTY_NAME:-unknown}. Ubuntu LTS is required."
+  printf '%s' "${VERSION:-}" | grep -qi 'LTS' || error "Unsupported Ubuntu release: ${PRETTY_NAME:-unknown}."
+  info "Detected Ubuntu LTS: ${PRETTY_NAME:-unknown}"
 }
 
-detect_ssh_port() {
-  local detected_port
+validate_username() {
+  local username="${1:-}"
+  local reserved
 
-  if [ -f "$VPSGUARD_CONFIG_FILE" ] && [ -n "${SSH_PORT:-}" ]; then
-    info "Using configured SSH port: $SSH_PORT"
-    return
-  fi
+  [ -n "$username" ] || return 1
+  [ "${#username}" -le 32 ] || return 1
+  [[ "$username" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || return 1
 
-  detected_port="$(sshd -T 2>/dev/null | awk '/^port / {print $2; exit}' || true)"
-
-  if [ -z "$detected_port" ]; then
-    detected_port="22"
-  fi
-
-  if [ -z "${SSH_PORT:-}" ] || [ ! -f "$VPSGUARD_CONFIG_FILE" ]; then
-    SSH_PORT="$detected_port"
-  fi
-
-  info "Detected SSH port: $SSH_PORT"
+  for reserved in root daemon bin sys sync games man lp mail news uucp proxy www-data backup list irc gnats nobody systemd-network systemd-timesync messagebus syslog _apt tss uuidd tcpdump sshd; do
+    [ "$username" != "$reserved" ] || return 1
+  done
 }
 
-check_root_ssh_key() {
-  if [ ! -s /root/.ssh/authorized_keys ]; then
-    error "Root SSH public key is missing.
-Please add your SSH public key to /root/.ssh/authorized_keys before running VPSGuard.
-Do not paste your private key into the VPS.
-For Termius: Keychain → Key → Public Key → Copy.
+validate_existing_user_account() {
+  local username="$1"
+  local passwd_entry uid home shell
 
-未检测到 root 的 SSH 公钥。
-请先把你的 SSH 公钥添加到 /root/.ssh/authorized_keys 后再运行 VPSGuard。
-不要把私钥粘贴到 VPS。
-Termius 用户：Keychain → Key → Public Key → Copy，复制 Public Key。"
+  if ! passwd_entry="$(getent passwd "$username" 2>/dev/null)"; then
+    passwd_entry=""
+  fi
+  [ -n "$passwd_entry" ] || return 0
+  uid="$(printf '%s\n' "$passwd_entry" | awk -F: '{print $3}')"
+  home="$(printf '%s\n' "$passwd_entry" | awk -F: '{print $6}')"
+  shell="$(printf '%s\n' "$passwd_entry" | awk -F: '{print $7}')"
+
+  [ "$uid" -ge 1000 ] || error "Existing account ${username} is a system account (UID ${uid})."
+  [ -n "$home" ] && [ "$home" != "/" ] || error "Existing account ${username} has an unsafe home directory."
+  case "$shell" in
+    */false|*/nologin|'') error "Existing account ${username} does not have a login shell." ;;
+  esac
+}
+
+prompt_for_username() {
+  local candidate
+
+  while true; do
+    read -r -p "请输入要创建的管理员用户名：" candidate
+    if validate_username "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+    warn "用户名无效：请使用小写字母或下划线开头，只包含小写字母、数字、下划线和连字符，最长 32 字符，且不能使用系统账户。"
+  done
+}
+
+confirm_existing_user() {
+  local username="$1"
+  local answer
+
+  info "User ${username} already exists. VPSGuard will preserve its password, home and existing SSH keys."
+  if [ ! -t 0 ]; then
+    return 0
   fi
 
-  info "Root SSH authorized_keys found."
+  read -r -p "输入 YES 使用现有用户 ${username}，其他输入取消：" answer
+  [ "$answer" = "YES" ] || error "Cancelled before modifying the existing user."
+}
+
+resolve_managed_user() {
+  local configured_user=""
+  local selection
+
+  if ! configured_user="$(read_env_value "$VPSGUARD_CONFIG_FILE" NEW_USER 2>/dev/null)"; then
+    configured_user=""
+  fi
+  PREVIOUS_MANAGED_USER="$configured_user"
+
+  if [ -n "$REQUESTED_NEW_USER" ]; then
+    validate_username "$REQUESTED_NEW_USER" || error "Invalid NEW_USER value: ${REQUESTED_NEW_USER}"
+    NEW_USER="$REQUESTED_NEW_USER"
+  elif [ -n "$configured_user" ]; then
+    validate_username "$configured_user" || error "Configured NEW_USER is invalid. Repair ${VPSGUARD_CONFIG_FILE}."
+    NEW_USER="$configured_user"
+    info "检测到 VPSGuard 管理用户：${NEW_USER}"
+    if [ -t 0 ]; then
+      printf '1. 继续使用\n2. 更换管理用户\n3. 取消\n'
+      read -r -p "请选择 [1]：" selection
+      case "${selection:-1}" in
+        1) ;;
+        2) NEW_USER="$(prompt_for_username)" ;;
+        3) error "Installation cancelled." ;;
+        *) error "Invalid selection." ;;
+      esac
+    fi
+  elif [ -t 0 ]; then
+    NEW_USER="$(prompt_for_username)"
+  else
+    error "No managed username is configured. In non-interactive mode provide NEW_USER, for example: sudo -E env NEW_USER=myadmin bash install.sh"
+  fi
+
+  validate_username "$NEW_USER" || error "Resolved username is invalid."
+  if [ -n "$PREVIOUS_MANAGED_USER" ] && [ "$PREVIOUS_MANAGED_USER" != "$NEW_USER" ]; then
+    warn "Management is moving from ${PREVIOUS_MANAGED_USER} to ${NEW_USER}; the old user and its data will be preserved."
+  fi
+  validate_existing_user_account "$NEW_USER"
+  if id "$NEW_USER" >/dev/null 2>&1; then
+    confirm_existing_user "$NEW_USER"
+  fi
+}
+
+validate_ssh_port() {
+  local port="${1:-}"
+  [[ "$port" =~ ^[0-9]+$ ]] || return 1
+  [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
+}
+
+detect_current_ssh_port() {
+  local detected connection_port
+
+  connection_port="$(printf '%s\n' "${SSH_CONNECTION:-}" | awk 'NF >= 4 {print $4}')"
+  if validate_ssh_port "$connection_port"; then
+    printf '%s\n' "$connection_port"
+    return 0
+  fi
+
+  if ! detected="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')"; then
+    detected=""
+  fi
+  if ! validate_ssh_port "$detected"; then
+    detected="22"
+  fi
+  printf '%s\n' "$detected"
+}
+
+prepare_sshd_runtime_directory() {
+  ensure_directory "${VPSGUARD_RUN_ROOT}/sshd" 755
+}
+
+resolve_ssh_ports() {
+  local configured_port configured_original
+
+  if ! configured_port="$(read_env_value "$VPSGUARD_CONFIG_FILE" SSH_PORT 2>/dev/null)"; then
+    configured_port=""
+  fi
+  if ! configured_original="$(read_env_value "$VPSGUARD_CONFIG_FILE" ORIGINAL_SSH_PORT 2>/dev/null)"; then
+    configured_original=""
+  fi
+  ORIGINAL_SSH_PORT="$(detect_current_ssh_port)"
+
+  if validate_ssh_port "$configured_original"; then
+    ORIGINAL_SSH_PORT="$configured_original"
+  fi
+
+  if [ -n "$REQUESTED_SSH_PORT" ]; then
+    validate_ssh_port "$REQUESTED_SSH_PORT" || error "SSH_PORT must be an integer from 1 to 65535."
+    SSH_PORT="$REQUESTED_SSH_PORT"
+  elif validate_ssh_port "$configured_port"; then
+    SSH_PORT="$configured_port"
+  else
+    SSH_PORT="$ORIGINAL_SSH_PORT"
+  fi
+
+  info "SSH port plan: current/original=${ORIGINAL_SSH_PORT}, target=${SSH_PORT}"
 }
 
 upgrade_system() {
-  info "Updating system packages..."
+  info "Updating Ubuntu packages and installing VPSGuard dependencies..."
   apt update
   DEBIAN_FRONTEND=noninteractive apt upgrade -y
-
-  info "Installing basic tools..."
-  DEBIAN_FRONTEND=noninteractive apt install -y \
-    sudo \
-    curl \
-    wget \
-    git \
-    vim \
-    nano \
-    unzip \
-    ufw \
-    fail2ban \
-    htop \
-    jq \
-    ca-certificates \
-    gnupg \
-    lsb-release \
-    net-tools \
-    iproute2 \
-    openssh-server
+  DEBIAN_FRONTEND=noninteractive apt install -y sudo curl wget git vim nano unzip ufw fail2ban htop jq ca-certificates gnupg lsb-release net-tools iproute2 openssh-server
 }
 
-enable_bbr() {
-  local sysctl_file="/etc/sysctl.d/99-bbr.conf"
-  local current_cc
-  local current_qdisc
-
-  info "Enabling BBR network acceleration..."
-
-  if ! modprobe tcp_bbr >/dev/null 2>&1; then
-    warn "tcp_bbr module could not be loaded. Kernel may not support BBR; continuing."
-    return 0
-  fi
-
-  cat > "$sysctl_file" <<'EOF'
-net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=bbr
-EOF
-
-  sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1 || warn "Failed to apply net.core.default_qdisc=fq immediately."
-  sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1 || warn "Failed to apply net.ipv4.tcp_congestion_control=bbr immediately."
-
-  current_cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
-  current_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
-
-  if [ "$current_cc" = "bbr" ] && [ "$current_qdisc" = "fq" ]; then
-    info "BBR enabled: tcp_congestion_control=bbr, default_qdisc=fq"
-  else
-    warn "BBR was configured but is not fully active yet. Current: tcp_congestion_control=${current_cc:-unknown}, default_qdisc=${current_qdisc:-unknown}"
-  fi
-}
-
-create_user() {
+ensure_managed_user() {
   if id "$NEW_USER" >/dev/null 2>&1; then
-    warn "User $NEW_USER already exists. Skipping user creation."
+    info "Reconciling existing user ${NEW_USER}."
   else
-    info "Creating user: $NEW_USER"
+    [ -t 0 ] || error "Creating a new administrator requires a trusted interactive terminal so a sudo password can be set and validated. VPSGuard does not accept passwords through automation variables."
+    info "Creating administrator user ${NEW_USER}."
     adduser --disabled-password --gecos "" "$NEW_USER"
   fi
 
-  info "Adding $NEW_USER to sudo group..."
   usermod -aG sudo "$NEW_USER"
+  validate_existing_user_account "$NEW_USER"
 }
 
-configure_sudo() {
-  info "Configuring passwordless sudo for $NEW_USER..."
-  cat >"/etc/sudoers.d/90-${NEW_USER}" <<EOF
-${NEW_USER} ALL=(ALL) NOPASSWD: ALL
-EOF
+managed_user_home() {
+  getent passwd "$NEW_USER" | awk -F: '{print $6}'
+}
 
-  chmod 440 "/etc/sudoers.d/90-${NEW_USER}"
+check_root_ssh_key() {
+  [ -s "$ROOT_AUTHORIZED_KEYS" ] || error "${ROOT_AUTHORIZED_KEYS} is missing or empty. Add a valid public key before running VPSGuard."
+  awk 'NF && $1 !~ /^#/' "$ROOT_AUTHORIZED_KEYS" | grep -q . || error "No usable public-key entry was found in ${ROOT_AUTHORIZED_KEYS}."
+  ssh-keygen -l -f "$ROOT_AUTHORIZED_KEYS" >/dev/null 2>&1 || error "${ROOT_AUTHORIZED_KEYS} does not contain a public key that ssh-keygen can parse."
+}
 
-  if visudo -cf "/etc/sudoers.d/90-${NEW_USER}" >/dev/null; then
-    info "Sudoers file is valid."
+configure_authorized_keys() {
+  local user_home ssh_directory authorized_keys temporary_file
+
+  check_root_ssh_key
+  user_home="$(managed_user_home)"
+  [ -n "$user_home" ] && [ "$user_home" != "/" ] || error "Could not resolve a safe home directory for ${NEW_USER}."
+  ssh_directory="${user_home}/.ssh"
+  authorized_keys="${ssh_directory}/authorized_keys"
+
+  ensure_directory "$ssh_directory" 700
+  temporary_file="$(mktemp "${authorized_keys}.tmp.XXXXXX")"
+  if [ -f "$authorized_keys" ]; then
+    awk 'NF && !seen[$0]++' "$authorized_keys" "$ROOT_AUTHORIZED_KEYS" > "$temporary_file"
   else
-    error "Sudoers validation failed."
+    awk 'NF && !seen[$0]++' "$ROOT_AUTHORIZED_KEYS" > "$temporary_file"
   fi
+  [ -s "$temporary_file" ] || error "Refusing to install an empty authorized_keys file."
+  chmod 600 "$temporary_file"
+  chown "${NEW_USER}:${NEW_USER}" "$temporary_file"
+  mv -f "$temporary_file" "$authorized_keys"
+  chown -R "${NEW_USER}:${NEW_USER}" "$ssh_directory"
+  chmod 700 "$ssh_directory"
+  chmod 600 "$authorized_keys"
+  info "Administrator authorized_keys reconciled without replacing existing keys."
 }
 
-setup_ssh_key() {
-  info "Configuring SSH key for $NEW_USER..."
-
-  mkdir -p "/home/${NEW_USER}/.ssh"
-  chmod 700 "/home/${NEW_USER}/.ssh"
-
-  if [ ! -s /root/.ssh/authorized_keys ]; then
-    error "Root authorized_keys is missing or empty."
-  fi
-
-  touch "/home/${NEW_USER}/.ssh/authorized_keys"
-  awk 'NF && !seen[$0]++' /root/.ssh/authorized_keys "/home/${NEW_USER}/.ssh/authorized_keys" > "/home/${NEW_USER}/.ssh/authorized_keys.tmp"
-  mv "/home/${NEW_USER}/.ssh/authorized_keys.tmp" "/home/${NEW_USER}/.ssh/authorized_keys"
-
-  chown -R "${NEW_USER}:${NEW_USER}" "/home/${NEW_USER}/.ssh"
-  chmod 600 "/home/${NEW_USER}/.ssh/authorized_keys"
-
-  info "SSH key entries synced to /home/${NEW_USER}/.ssh/authorized_keys"
+sudoers_file_for_user() {
+  printf '%s/90-vpsguard-%s\n' "$SUDOERS_DIR" "$NEW_USER"
 }
 
-test_sudo_user() {
-  info "Testing sudo permission for $NEW_USER..."
-
-  if sudo -u "$NEW_USER" sudo -n -i true >/dev/null 2>&1; then
-    info "$NEW_USER can use passwordless sudo -i successfully."
-  else
-    error "$NEW_USER sudo test failed. Stop before changing SSH settings."
-  fi
+user_in_sudo_group() {
+  id -nG "$NEW_USER" 2>/dev/null | tr ' ' '\n' | grep -Fxq sudo
 }
 
-configure_ufw() {
-  info "Configuring UFW firewall..."
+user_password_is_set() {
+  local password_state
 
-  info "Allowing SSH port only: ${SSH_PORT}/tcp"
-  mkdir -p "$VPSGUARD_STATE_DIR"
+  if ! password_state="$(passwd -S "$NEW_USER" 2>/dev/null | awk '{print $2}')"; then
+    password_state=""
+  fi
+  [ "$password_state" = "P" ]
+}
 
-  if [ -f "$VPSGUARD_UFW_DONE_MARKER" ]; then
-    warn "UFW phase already completed. Skipping firewall changes."
+sudo_policy_has_full_admin_from_text() {
+  awk '
+    /^[[:space:]]*\(ALL([[:space:]]*:[[:space:]]*ALL)?\)[[:space:]]+ALL[[:space:]]*$/ {found=1}
+    END {exit !found}
+  '
+}
+
+ensure_sudo_password() {
+  if user_password_is_set; then
+    info "Administrator ${NEW_USER} has a password for standard sudo authentication."
     return 0
   fi
 
-  if [ -f "$VPSGUARD_INSTALLED_MARKER" ]; then
-    warn "VPSGuard is already installed. Skipping destructive firewall changes."
+  [ -t 0 ] || error "Administrator ${NEW_USER} has no usable password. Set one with 'passwd ${NEW_USER}' from a trusted console, then rerun VPSGuard."
+  warn "VPSGuard uses standard password-authenticated sudo. Set a strong password for ${NEW_USER}; it is not used for SSH login."
+  passwd "$NEW_USER" || error "Could not set the sudo password for ${NEW_USER}."
+  user_password_is_set || error "Password state for ${NEW_USER} is still locked or unavailable."
+}
+
+remove_vpsguard_passwordless_override() {
+  local sudoers_file legacy_file
+
+  sudoers_file="$(sudoers_file_for_user)"
+  if [ -e "$sudoers_file" ]; then
+    if head -n 1 "$sudoers_file" | grep -Fq 'Managed by VPSGuard'; then
+      rm -f "$sudoers_file"
+      info "Removed the legacy VPSGuard full passwordless sudo override."
+    else
+      error "Refusing to replace an unrecognized sudoers file: ${sudoers_file}"
+    fi
   fi
 
-  if ufw status 2>/dev/null | grep -q "^Status: active"; then
-    warn "UFW is already active. Preserving existing rules."
-    if ! ufw status numbered 2>/dev/null | grep -q "${SSH_PORT}/tcp"; then
-      ufw allow "${SSH_PORT}/tcp" || warn "Could not add SSH allow rule, please verify UFW manually."
-    fi
-  else
-    if [ "${UFW_RESET_ENABLED}" = "true" ] && [ ! -f "$VPSGUARD_INSTALLED_MARKER" ]; then
-      info "First run detected. Applying fresh UFW rules."
-      ufw --force reset
-      ufw default deny incoming
-      ufw default allow outgoing
-    else
-      warn "UFW reset disabled or this is a re-run. Skipping reset and preserving existing rules."
-    fi
+  legacy_file="${SUDOERS_DIR}/90-${NEW_USER}"
+  if [ -f "$legacy_file" ] && grep -Fxq "${NEW_USER} ALL=(ALL) NOPASSWD: ALL" "$legacy_file"; then
+    rm -f "$legacy_file"
+    info "Removed the recognized legacy passwordless sudo entry ${legacy_file}."
+  fi
+}
 
-    if ! ufw status numbered 2>/dev/null | grep -q "${SSH_PORT}/tcp"; then
-      ufw allow "${SSH_PORT}/tcp"
-    fi
+configure_sudo() {
+  user_in_sudo_group || error "Administrator ${NEW_USER} is not a member of the sudo group."
+  ensure_sudo_password
+  remove_vpsguard_passwordless_override
+  visudo -c >/dev/null || error "Global sudoers validation failed."
+  info "Standard password-authenticated sudo policy is configured for ${NEW_USER}."
+}
+
+verify_sudo_configuration() {
+  local sudoers_file policy_output
+
+  sudoers_file="$(sudoers_file_for_user)"
+  [ ! -e "$sudoers_file" ] || return 1
+  user_in_sudo_group || return 1
+  user_password_is_set || return 1
+  visudo -c >/dev/null 2>&1 || return 1
+  if ! policy_output="$(LC_ALL=C sudo -l -U "$NEW_USER" 2>/dev/null)"; then
+    return 1
+  fi
+  printf '%s\n' "$policy_output" | sudo_policy_has_full_admin_from_text || return 1
+  sudo -u "$NEW_USER" sudo -k >/dev/null 2>&1 || return 1
+  if sudo -u "$NEW_USER" sudo -n true >/dev/null 2>&1; then
+    return 1
+  fi
+}
+
+confirm_sudo_password_authentication() {
+  if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+    [ -t 0 ] || error "A terminal is required to validate the administrator's sudo password before SSH hardening."
+    info "Enter the password for ${NEW_USER} once to validate 'sudo -i' authentication before SSH is changed."
+  fi
+  sudo -u "$NEW_USER" sudo -k >/dev/null 2>&1 || error "Could not invalidate the sudo credential cache for ${NEW_USER}."
+  sudo -u "$NEW_USER" sudo -v || error "Password-authenticated sudo validation failed for ${NEW_USER}."
+  sudo -u "$NEW_USER" sudo -k >/dev/null 2>&1 || error "Could not clear the sudo credential cache after validation."
+}
+
+ufw_rule_exists_from_text() {
+  local port="$1"
+  awk -v target="${port}/tcp" '$1 == target {found=1} END {exit !found}'
+}
+
+ufw_added_rule_exists_from_text() {
+  local port="$1"
+  awk -v target="${port}/tcp" '$1 == "ufw" && $2 == "allow" && $3 == target {found=1} END {exit !found}'
+}
+
+ufw_tcp_rule_exists() {
+  local port="$1"
+  if ufw status 2>/dev/null | ufw_rule_exists_from_text "$port"; then
+    return 0
+  fi
+  ufw show added 2>/dev/null | ufw_added_rule_exists_from_text "$port"
+}
+
+ufw_is_active() {
+  ufw status 2>/dev/null | awk 'NR == 1 && tolower($2) == "active" {found=1} END {exit !found}'
+}
+
+record_managed_rule() {
+  local rule="$1"
+  local temporary_file
+
+  [ -f "$VPSGUARD_MANAGED_RULES" ] || atomic_write "$VPSGUARD_MANAGED_RULES" 600 "# UFW rules added by VPSGuard
+"
+  grep -Fxq "$rule" "$VPSGUARD_MANAGED_RULES" && return 0
+  temporary_file="$(mktemp "${VPSGUARD_MANAGED_RULES}.tmp.XXXXXX")"
+  awk 'NF && !seen[$0]++' "$VPSGUARD_MANAGED_RULES" > "$temporary_file"
+  printf '%s\n' "$rule" >> "$temporary_file"
+  chmod 600 "$temporary_file"
+  if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+    chown root:root "$temporary_file"
+  fi
+  mv -f "$temporary_file" "$VPSGUARD_MANAGED_RULES"
+}
+
+remove_managed_rule_record() {
+  local rule="$1"
+  local temporary_file
+
+  [ -f "$VPSGUARD_MANAGED_RULES" ] || return 0
+  temporary_file="$(mktemp "${VPSGUARD_MANAGED_RULES}.tmp.XXXXXX")"
+  awk -v unwanted="$rule" '$0 != unwanted' "$VPSGUARD_MANAGED_RULES" > "$temporary_file"
+  chmod 600 "$temporary_file"
+  if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+    chown root:root "$temporary_file"
+  fi
+  mv -f "$temporary_file" "$VPSGUARD_MANAGED_RULES"
+}
+
+ensure_ufw_tcp_rule() {
+  local port="$1"
+
+  if ufw_tcp_rule_exists "$port"; then
+    info "UFW already has an exact ${port}/tcp rule."
+    return 0
+  fi
+
+  ufw allow "${port}/tcp"
+  ufw_tcp_rule_exists "$port" || error "UFW did not expose the newly added exact ${port}/tcp rule."
+  record_managed_rule "${port}/tcp"
+  info "Added and recorded UFW rule ${port}/tcp."
+}
+
+configure_ufw_before_ssh() {
+  local active="false"
+
+  if ufw_is_active; then
+    active="true"
+  fi
+
+  ensure_ufw_tcp_rule "$SSH_PORT"
+  if [ "$ORIGINAL_SSH_PORT" != "$SSH_PORT" ]; then
+    ensure_ufw_tcp_rule "$ORIGINAL_SSH_PORT"
+  fi
+
+  if [ "$active" != "true" ]; then
+    ufw default deny incoming
+    ufw default allow outgoing
     ufw --force enable
   fi
+  ufw_is_active || error "UFW is not active after configuration."
+}
 
-  touch "$VPSGUARD_UFW_DONE_MARKER"
+write_vpsguard_sshd_config() {
+  local keep_old_port="${1:-false}"
+  local port_lines content
 
-  if ufw status 2>/dev/null | grep -q "^Status: active"; then
-    info "UFW enabled. SSH port ${SSH_PORT}/tcp is allowed."
-  else
-    warn "UFW is not active. Please verify firewall status manually."
+  assert_managed_or_absent "$VPSGUARD_SSHD_CONFIG"
+  port_lines="Port ${SSH_PORT}"
+  if [ "$keep_old_port" = "true" ] && [ "$ORIGINAL_SSH_PORT" != "$SSH_PORT" ]; then
+    port_lines="${port_lines}
+Port ${ORIGINAL_SSH_PORT}"
   fi
 
-  ufw status verbose || true
+  content="# Managed by VPSGuard ${VPSGUARD_VERSION}. Do not edit; change ${VPSGUARD_CONFIG_FILE} and rerun.
+${port_lines}
+PermitRootLogin no
+PasswordAuthentication no
+PubkeyAuthentication yes
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+X11Forwarding no
+"
+  atomic_write "$VPSGUARD_SSHD_CONFIG" 600 "$content"
+}
+
+effective_sshd_value_from_text() {
+  local key="$1"
+  awk -v wanted="$key" '$1 == wanted {print $2; exit}'
+}
+
+effective_sshd_has_port_from_text() {
+  local port="$1"
+  awk -v wanted="$port" '$1 == "port" && $2 == wanted {found=1} END {exit !found}'
+}
+
+verify_effective_sshd_config() {
+  local output permit_root password_auth pubkey_auth failed=0 client_address host_context
+
+  sshd -t || return 1
+  if [ -n "${SSHD_T_OUTPUT_OVERRIDE:-}" ]; then
+    output="$SSHD_T_OUTPUT_OVERRIDE"
+  else
+    client_address="$(printf '%s\n' "${SSH_CONNECTION:-}" | awk 'NF >= 1 {print $1}')"
+    host_context="$(hostname -f 2>/dev/null || hostname)"
+    if [ -n "$client_address" ] && output="$(sshd -T -C "user=${NEW_USER},host=${host_context},addr=${client_address}" 2>/dev/null)"; then
+      :
+    else
+      output="$(sshd -T 2>/dev/null)"
+    fi
+  fi
+  printf '%s\n' "$output" | effective_sshd_has_port_from_text "$SSH_PORT" || { warn "Effective SSH port does not include ${SSH_PORT}."; failed=1; }
+  permit_root="$(printf '%s\n' "$output" | effective_sshd_value_from_text permitrootlogin)"
+  password_auth="$(printf '%s\n' "$output" | effective_sshd_value_from_text passwordauthentication)"
+  pubkey_auth="$(printf '%s\n' "$output" | effective_sshd_value_from_text pubkeyauthentication)"
+  [ "$permit_root" = "no" ] || { warn "Effective PermitRootLogin is ${permit_root:-missing}, expected no."; failed=1; }
+  [ "$password_auth" = "no" ] || { warn "Effective PasswordAuthentication is ${password_auth:-missing}, expected no."; failed=1; }
+  [ "$pubkey_auth" = "yes" ] || { warn "Effective PubkeyAuthentication is ${pubkey_auth:-missing}, expected yes."; failed=1; }
+  [ "$failed" -eq 0 ]
+}
+
+unit_exists() {
+  local unit="$1"
+  systemctl list-unit-files "$unit" --no-legend 2>/dev/null | awk -v wanted="$unit" '$1 == wanted {found=1} END {exit !found}'
+}
+
+detect_ssh_runtime_mode() {
+  SSH_RUNTIME_MODE="service"
+  SSH_SERVICE_UNIT="ssh.service"
+
+  if ! command -v systemctl >/dev/null 2>&1; then
+    SSH_RUNTIME_MODE="legacy"
+    if command -v service >/dev/null 2>&1 && service ssh status >/dev/null 2>&1; then
+      SSH_SERVICE_UNIT="ssh"
+    else
+      SSH_SERVICE_UNIT="sshd"
+    fi
+    return 0
+  fi
+
+  if unit_exists sshd.service && ! unit_exists ssh.service; then
+    SSH_SERVICE_UNIT="sshd.service"
+  fi
+
+  if unit_exists ssh.socket && { systemctl is-active --quiet ssh.socket || systemctl is-enabled --quiet ssh.socket; }; then
+    SSH_RUNTIME_MODE="socket"
+  fi
+}
+
+apply_ssh_runtime() {
+  detect_ssh_runtime_mode
+
+  case "$SSH_RUNTIME_MODE" in
+    socket)
+      systemctl daemon-reload
+      systemctl restart ssh.socket
+      if systemctl is-active --quiet "$SSH_SERVICE_UNIT"; then
+        systemctl reload "$SSH_SERVICE_UNIT" || systemctl restart "$SSH_SERVICE_UNIT"
+      fi
+      systemctl is-active --quiet ssh.socket || return 1
+      ;;
+    service)
+      if systemctl is-active --quiet "$SSH_SERVICE_UNIT"; then
+        systemctl reload "$SSH_SERVICE_UNIT" || systemctl restart "$SSH_SERVICE_UNIT"
+      else
+        systemctl start "$SSH_SERVICE_UNIT"
+      fi
+      systemctl is-active --quiet "$SSH_SERVICE_UNIT" || return 1
+      ;;
+    legacy)
+      service "$SSH_SERVICE_UNIT" reload || service "$SSH_SERVICE_UNIT" restart
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+ssh_listener_present_from_text() {
+  local port="$1"
+  awk -v wanted="$port" '
+    $1 == "LISTEN" {
+      address=$4
+      sub(/^.*:/, "", address)
+      if (address == wanted && ($0 ~ /sshd/ || $0 ~ /systemd/)) found=1
+    }
+    END {exit !found}
+  '
+}
+
+verify_ssh_listener() {
+  local port="$1"
+  local output
+  output="${SS_LISTEN_OUTPUT_OVERRIDE:-$(ss -ltnpH 2>/dev/null)}"
+  printf '%s\n' "$output" | ssh_listener_present_from_text "$port"
+}
+
+configure_ssh_safely() {
+  local keep_old_port="false"
+  local answer=""
+
+  if [ "$ORIGINAL_SSH_PORT" != "$SSH_PORT" ]; then
+    keep_old_port="true"
+  fi
+
+  write_vpsguard_sshd_config "$keep_old_port"
+  verify_effective_sshd_config || error "Effective sshd configuration does not match the VPSGuard policy. SSH was not restarted."
+  apply_ssh_runtime || error "Failed to apply SSH configuration safely. Keep the current root session open."
+  verify_ssh_listener "$SSH_PORT" || error "Target SSH port ${SSH_PORT} is not listening through sshd/systemd. Old UFW access was preserved."
+  if [ "$keep_old_port" = "true" ]; then
+    verify_ssh_listener "$ORIGINAL_SSH_PORT" || error "Old SSH port ${ORIGINAL_SSH_PORT} was not preserved during staging. Keep the current session open and inspect SSH manually."
+  fi
+  ufw_tcp_rule_exists "$SSH_PORT" || error "Target SSH port ${SSH_PORT}/tcp is not allowed by UFW."
+
+  if [ "$ORIGINAL_SSH_PORT" = "$SSH_PORT" ]; then
+    rm -f "$VPSGUARD_PENDING_PORT_MARKER"
+    return 0
+  fi
+
+  atomic_write "$VPSGUARD_PENDING_PORT_MARKER" 600 "target=${SSH_PORT}
+old=${ORIGINAL_SSH_PORT}
+"
+  warn "New SSH port ${SSH_PORT} is listening locally. Old port ${ORIGINAL_SSH_PORT} remains listening and allowed until remote login is confirmed."
+  printf '请在第二个终端测试：ssh -p %s %s@SERVER_IP\n' "$SSH_PORT" "$NEW_USER"
+
+  if [ -t 0 ]; then
+    read -r -p "确认第二终端登录和 sudo 正常后输入 YES；其他输入保留旧端口：" answer
+  fi
+  if [ "$answer" != "YES" ]; then
+    INSTALL_STATUS="pending-port-finalization"
+    return 0
+  fi
+
+  write_vpsguard_sshd_config false
+  verify_effective_sshd_config || error "Final SSH configuration validation failed; old UFW rule remains."
+  apply_ssh_runtime || error "Could not finalize the SSH runtime; old UFW rule remains."
+  verify_ssh_listener "$SSH_PORT" || error "Target SSH listener disappeared during finalization; old UFW rule remains."
+
+  if grep -Fxq "${ORIGINAL_SSH_PORT}/tcp" "$VPSGUARD_MANAGED_RULES" 2>/dev/null; then
+    ufw --force delete allow "${ORIGINAL_SSH_PORT}/tcp"
+    remove_managed_rule_record "${ORIGINAL_SSH_PORT}/tcp"
+  else
+    warn "Old UFW rule ${ORIGINAL_SSH_PORT}/tcp predates VPSGuard and was preserved."
+  fi
+  rm -f "$VPSGUARD_PENDING_PORT_MARKER"
 }
 
 configure_fail2ban() {
-  info "Configuring fail2ban for SSH..."
-
-  cat >"$FAIL2BAN_JAIL" <<EOF
+  local content protected_ports
+  assert_managed_or_absent "$FAIL2BAN_JAIL"
+  protected_ports="$SSH_PORT"
+  if [ -f "$VPSGUARD_PENDING_PORT_MARKER" ] && [ "$ORIGINAL_SSH_PORT" != "$SSH_PORT" ]; then
+    protected_ports="${SSH_PORT},${ORIGINAL_SSH_PORT}"
+  fi
+  content="# Managed by VPSGuard ${VPSGUARD_VERSION}
 [sshd]
 enabled = true
-port = ${SSH_PORT}
+port = ${protected_ports}
 filter = sshd
 backend = systemd
 maxretry = 5
 findtime = 10m
 bantime = 1h
-EOF
-
-  systemctl enable fail2ban
-  systemctl restart fail2ban
-  sleep 3
-
-  info "fail2ban configured."
-  fail2ban-client status sshd || warn "fail2ban sshd status check failed."
+"
+  atomic_write "$FAIL2BAN_JAIL" 644 "$content"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl enable fail2ban.service
+    systemctl restart fail2ban.service
+    systemctl is-active --quiet fail2ban.service || error "fail2ban did not become active."
+  else
+    service fail2ban restart
+  fi
+  fail2ban-client status sshd >/dev/null 2>&1 || error "The fail2ban sshd jail is not active."
 }
 
-backup_sshd_config() {
-  SSHD_BACKUP_FILE="/etc/ssh/sshd_config.bak.vpsguard"
+available_congestion_controls() {
+  sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || return 0
+}
 
-  if [ -f "$SSHD_BACKUP_FILE" ]; then
-    info "SSH config backup already exists: $SSHD_BACKUP_FILE"
+classify_bbr_state() {
+  local available="$1"
+  local current="$2"
+  local qdisc="$3"
+  local apply_failed="${4:-false}"
+
+  if [ "$current" = "bbr" ] && [ "$qdisc" = "fq" ]; then
+    printf 'already-enabled\n'
+  elif ! printf ' %s ' "$available" | grep -Fq ' bbr '; then
+    printf 'unsupported\n'
+  elif [ "$apply_failed" = "true" ]; then
+    printf 'failed\n'
+  else
+    printf 'enabled\n'
+  fi
+}
+
+write_bbr_files() {
+  local module_persistence="${BBR_MODULE_PERSISTENCE_REQUIRED:-auto}"
+
+  assert_managed_or_absent "$BBR_SYSCTL_FILE"
+  atomic_write "$BBR_SYSCTL_FILE" 644 "# Managed by VPSGuard ${VPSGUARD_VERSION}
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+"
+
+  if [ "$module_persistence" = "auto" ]; then
+    if lsmod 2>/dev/null | awk '$1 == "tcp_bbr" {found=1} END {exit !found}'; then
+      module_persistence="true"
+    else
+      module_persistence="false"
+    fi
+  fi
+  if [ "$module_persistence" = "true" ] || [ "$module_persistence" = "1" ]; then
+    assert_managed_or_absent "$BBR_MODULES_FILE"
+    atomic_write "$BBR_MODULES_FILE" 644 "# Managed by VPSGuard ${VPSGUARD_VERSION}
+tcp_bbr
+"
+  elif [ -f "$BBR_MODULES_FILE" ] && head -n 1 "$BBR_MODULES_FILE" | grep -Fq 'Managed by VPSGuard'; then
+    rm -f "$BBR_MODULES_FILE"
+  fi
+}
+
+migrate_legacy_bbr_file() {
+  local legacy_file="${VPSGUARD_ETC_ROOT}/sysctl.d/99-bbr.conf"
+  local normalized
+
+  [ -f "$legacy_file" ] || return 0
+  normalized="$(awk 'NF && $1 !~ /^#/ {gsub(/[[:space:]]/, ""); print}' "$legacy_file")"
+  if [ "$normalized" = $'net.core.default_qdisc=fq\nnet.ipv4.tcp_congestion_control=bbr' ]; then
+    rm -f "$legacy_file"
+    info "Removed the exact legacy VPSGuard BBR file after migrating to ${BBR_SYSCTL_FILE}."
+  else
+    warn "Preserved unrecognized legacy BBR file: ${legacy_file}"
+  fi
+}
+
+enable_bbr() {
+  local available current qdisc apply_failed="false" initial_status
+
+  available="$(available_congestion_controls)"
+  if ! current="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"; then current=""; fi
+  if ! qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null)"; then qdisc=""; fi
+  initial_status="$(classify_bbr_state "$available" "$current" "$qdisc")"
+  if [ "$initial_status" = "already-enabled" ]; then
+    write_bbr_files
+    migrate_legacy_bbr_file
+    BBR_STATUS="already-enabled"
     return 0
   fi
 
-  cp "$SSHD_CONFIG" "$SSHD_BACKUP_FILE"
-  info "SSH config backup created: $SSHD_BACKUP_FILE"
-}
-
-set_sshd_option() {
-  local key="$1"
-  local value="$2"
-
-  if grep -qiE "^[#[:space:]]*${key}[[:space:]]+" "$SSHD_CONFIG"; then
-    sed -i -E "s|^[#[:space:]]*${key}[[:space:]]+.*|${key} ${value}|I" "$SSHD_CONFIG"
-  else
-    echo "${key} ${value}" >> "$SSHD_CONFIG"
-  fi
-}
-
-verify_ssh_service_available() {
-  systemctl is-active --quiet ssh.service || ss -tulpn | grep -q ":${SSH_PORT}"
-}
-
-ssh_service_error() {
-  error "SSH service did not become available after applying hardened configuration.
-Do NOT close this root session until SSH login is verified.
-Please run:
-systemctl status ssh --no-pager
-systemctl status ssh.socket --no-pager
-sshd -t
-ss -tulpn | grep ':${SSH_PORT}'"
-}
-
-apply_ssh_service_changes() {
-  local applied=0
-  local success_message=""
-
-  if systemctl is-active --quiet ssh.service; then
-    if systemctl reload ssh.service; then
-      applied=1
-      success_message="SSH hardened and reloaded."
-    elif systemctl restart ssh.service; then
-      applied=1
-      success_message="SSH hardened and restarted."
+  if ! printf ' %s ' "$available" | grep -Fq ' bbr '; then
+    if command -v modprobe >/dev/null 2>&1; then
+      if ! modprobe tcp_bbr >/dev/null 2>&1; then
+        warn "modprobe tcp_bbr failed; checking whether BBR is built into or otherwise exposed by the kernel."
+      fi
     fi
-  elif systemctl is-active --quiet ssh.socket; then
-    if systemctl restart ssh.service || systemctl start ssh.service; then
-      applied=1
-      success_message="SSH hardened and started via ssh.socket-compatible path."
-    fi
-  elif systemctl restart ssh.service; then
-    applied=1
-    success_message="SSH hardened and restarted."
+    available="$(available_congestion_controls)"
+  fi
+  if ! printf ' %s ' "$available" | grep -Fq ' bbr '; then
+    BBR_STATUS="unsupported"
+    warn "BBR is unavailable in this kernel/container; continuing without kernel replacement."
+    return 0
   fi
 
-  if [ "$applied" -eq 1 ] && verify_ssh_service_available; then
-    if [ -n "$success_message" ]; then
-      info "$success_message"
-    else
-      info "SSH hardened and listening on port ${SSH_PORT}."
-    fi
-  else
-    ssh_service_error
-  fi
+  write_bbr_files
+  migrate_legacy_bbr_file
+  sysctl -p "$BBR_SYSCTL_FILE" >/dev/null 2>&1 || apply_failed="true"
+  if ! current="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"; then current=""; fi
+  if ! qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null)"; then qdisc=""; fi
+  BBR_STATUS="$(classify_bbr_state "$available" "$current" "$qdisc" "$apply_failed")"
+
+  case "$BBR_STATUS" in
+    enabled|already-enabled) info "BBR status: ${BBR_STATUS} (bbr + fq)." ;;
+    failed) warn "BBR is supported but could not be applied; core SSH installation will continue." ;;
+    unsupported) warn "BBR is unsupported; core SSH installation will continue." ;;
+  esac
 }
 
-harden_ssh() {
-  info "Hardening SSH..."
+verify_authorized_keys() {
+  local user_home ssh_directory authorized_keys owner ssh_mode key_mode
 
-  backup_sshd_config
-
-  # Keep the current SSH port.
-  # VPSGuard only allows this port in UFW to avoid accidental lockout.
-  set_sshd_option "Port" "$SSH_PORT"
-
-  # Disable direct root SSH login.
-  # After this change, you should log in as the sudo user instead of root.
-  set_sshd_option "PermitRootLogin" "no"
-
-  # Enable SSH public key authentication.
-  # This allows login with SSH keys, which is safer than password login.
-  set_sshd_option "PubkeyAuthentication" "yes"
-
-  # Disable SSH password authentication.
-  # This blocks direct password-based SSH login and reduces brute-force risk.
-  set_sshd_option "PasswordAuthentication" "no"
-
-  # Disable keyboard-interactive authentication.
-  # This prevents alternative interactive password prompts such as PAM challenge-response login.
-  set_sshd_option "KbdInteractiveAuthentication" "no"
-
-  # Disable empty password login.
-  # This ensures users with empty passwords cannot log in through SSH.
-  set_sshd_option "PermitEmptyPasswords" "no"
-
-  # Disable X11 forwarding.
-  # This reduces unnecessary SSH features and lowers the attack surface on a server.
-  set_sshd_option "X11Forwarding" "no"
-
-  mkdir -p /run/sshd
-  chmod 755 /run/sshd
-
-  if sshd -t; then
-    info "SSH configuration test passed."
-  else
-    error "SSH configuration test failed.
-Backup file: ${SSHD_BACKUP_FILE}
-This can be caused by sshd_config syntax, missing runtime directories, or platform-specific SSH service requirements.
-Please also check that /run/sshd exists and has correct permissions."
-  fi
-
-  apply_ssh_service_changes
+  user_home="$(managed_user_home)"
+  ssh_directory="${user_home}/.ssh"
+  authorized_keys="${ssh_directory}/authorized_keys"
+  [ -s "$authorized_keys" ] || return 1
+  if ! owner="$(stat -c '%U:%G' "$authorized_keys" 2>/dev/null)"; then owner=""; fi
+  if ! ssh_mode="$(stat -c '%a' "$ssh_directory" 2>/dev/null)"; then ssh_mode=""; fi
+  if ! key_mode="$(stat -c '%a' "$authorized_keys" 2>/dev/null)"; then key_mode=""; fi
+  [ "$owner" = "${NEW_USER}:${NEW_USER}" ] && [ "$ssh_mode" = "700" ] && [ "$key_mode" = "600" ]
 }
 
-final_check() {
+verify_ssh_runtime_healthy() {
+  detect_ssh_runtime_mode
+  case "$SSH_RUNTIME_MODE" in
+    socket) systemctl is-active --quiet ssh.socket ;;
+    service) systemctl is-active --quiet "$SSH_SERVICE_UNIT" ;;
+    legacy) service "$SSH_SERVICE_UNIT" status >/dev/null 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
+
+verify_config_permissions() {
+  local owner mode
+  if ! owner="$(stat -c '%U:%G' "$VPSGUARD_CONFIG_FILE" 2>/dev/null)"; then owner=""; fi
+  if ! mode="$(stat -c '%a' "$VPSGUARD_CONFIG_FILE" 2>/dev/null)"; then mode=""; fi
+  [ "$owner" = "root:root" ] && [ "$mode" = "600" ]
+}
+
+run_final_acceptance() {
+  local failures=0 warnings=0 current_cc current_qdisc
+
+  id "$NEW_USER" >/dev/null 2>&1 || { warn "Acceptance: managed user missing."; failures=$((failures + 1)); }
+  validate_existing_user_account "$NEW_USER"
+  verify_authorized_keys || { warn "Acceptance: authorized_keys ownership or permissions are invalid."; failures=$((failures + 1)); }
+  verify_sudo_configuration || { warn "Acceptance: sudo validation failed."; failures=$((failures + 1)); }
+  verify_effective_sshd_config || { warn "Acceptance: effective SSH policy mismatch."; failures=$((failures + 1)); }
+  verify_ssh_runtime_healthy || { warn "Acceptance: SSH service/socket runtime is unhealthy."; failures=$((failures + 1)); }
+  verify_ssh_listener "$SSH_PORT" || { warn "Acceptance: target SSH listener missing."; failures=$((failures + 1)); }
+  ufw_is_active || { warn "Acceptance: UFW is inactive."; failures=$((failures + 1)); }
+  ufw_tcp_rule_exists "$SSH_PORT" || { warn "Acceptance: target UFW rule missing."; failures=$((failures + 1)); }
+  verify_config_permissions || { warn "Acceptance: VPSGuard config ownership or mode is invalid."; failures=$((failures + 1)); }
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl is-active --quiet fail2ban.service || { warn "Acceptance: fail2ban service is inactive."; failures=$((failures + 1)); }
+  fi
+  fail2ban-client status sshd >/dev/null 2>&1 || { warn "Acceptance: fail2ban sshd jail unavailable."; failures=$((failures + 1)); }
+
+  if ! current_cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"; then current_cc=""; fi
+  if ! current_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null)"; then current_qdisc=""; fi
+  if [ "$current_cc" != "bbr" ] || [ "$current_qdisc" != "fq" ]; then
+    warnings=$((warnings + 1))
+  fi
+
+  [ "$failures" -eq 0 ] || return 1
+  if [ "$INSTALL_STATUS" = "pending-port-finalization" ]; then
+    :
+  elif [ "$warnings" -gt 0 ]; then
+    INSTALL_STATUS="success-with-warnings"
+  else
+    INSTALL_STATUS="success"
+  fi
+  if [ -n "$PREVIOUS_MANAGED_USER" ] && [ "$PREVIOUS_MANAGED_USER" != "$NEW_USER" ]; then
+    warn "Previous managed user ${PREVIOUS_MANAGED_USER} still exists and was not deleted. Review its access manually."
+  fi
+  write_config_env
+  atomic_write "$VPSGUARD_INSTALLED_MARKER" 600 "${INSTALL_STATUS}
+"
+}
+
+print_final_summary() {
   local server_ip
   server_ip="$(curl -4 --max-time 3 -fsS https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')"
 
-  echo
-  echo -e "${MAGENTA}${BOLD}============================================================${NC}"
-  echo -e "${MAGENTA}${BOLD}                  VPSGuard Setup Completed                  ${NC}"
-  echo -e "${MAGENTA}${BOLD}============================================================${NC}"
-  echo
-  echo -e "${CYAN}${BOLD}Final Configuration${NC}"
-  echo -e "${BLUE}------------------------------------------------------------${NC}"
-  echo -e "${GREEN}OS:${NC}                 $(grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '"')"
-  echo -e "${GREEN}New sudo user:${NC}      ${BOLD}${NEW_USER}${NC}"
-  echo -e "${GREEN}SSH port:${NC}           ${BOLD}${SSH_PORT}${NC}"
-  echo -e "${GREEN}Root SSH login:${NC}     ${RED}${BOLD}Disabled${NC}"
-  echo -e "${GREEN}Password SSH login:${NC} ${RED}${BOLD}Disabled${NC}"
-  echo -e "${GREEN}SSH key login:${NC}      ${GREEN}${BOLD}Enabled${NC}"
-  echo -e "${GREEN}UFW firewall:${NC}       ${GREEN}${BOLD}Enabled${NC}"
-  echo -e "${GREEN}Allowed ports:${NC}      ${BOLD}${SSH_PORT}/tcp only${NC}"
-  echo -e "${GREEN}fail2ban:${NC}           ${GREEN}${BOLD}Enabled${NC}"
-  echo -e "${GREEN}fail2ban maxretry:${NC}  ${BOLD}5${NC}"
-  echo -e "${GREEN}fail2ban findtime:${NC}  ${BOLD}10m${NC}"
-  echo -e "${GREEN}fail2ban bantime:${NC}   ${BOLD}1h${NC}"
-  echo -e "${BLUE}------------------------------------------------------------${NC}"
-  echo
-  echo -e "${YELLOW}${BOLD}Test new SSH login from your local computer:${NC}"
-  echo
-  echo -e "  ${BOLD}ssh ${NEW_USER}@${server_ip} -p ${SSH_PORT}${NC}"
-  echo
-  echo -e "${YELLOW}${BOLD}Then test passwordless sudo:${NC}"
-  echo
-  echo -e "  ${BOLD}sudo -i${NC}"
-  echo
-  echo -e "${YELLOW}${BOLD}Expected output:${NC}"
-  echo
-  echo -e "  ${GREEN}${BOLD}A root shell prompt without a password prompt${NC}"
-  echo
-  echo -e "${RED}${BOLD}IMPORTANT:${NC}"
-  echo -e "${RED}${BOLD}Do NOT close this root session until the new ${NEW_USER} SSH login works.${NC}"
-  echo
-  echo -e "${CYAN}${BOLD}Useful status commands:${NC}"
-  echo
-  echo -e "  ${BOLD}sudo ufw status verbose${NC}"
-  echo -e "  ${BOLD}sudo fail2ban-client status sshd${NC}"
-  echo -e "  ${BOLD}sudo ss -tulpn${NC}"
-  echo
-  echo -e "${MAGENTA}${BOLD}============================================================${NC}"
-  echo
-}
-
-phase_1_preflight_checks() {
-  require_root
-  check_ubuntu_lts
-}
-
-phase_2_config_loading() {
-  ensure_state_dir
-  load_config_env
-  detect_ssh_port
-  persist_config_env
-}
-
-phase_3_user_setup() {
-  if [ -f "$VPSGUARD_SSH_DONE_MARKER" ]; then
-    info "Phase 3 already completed. Skipping user setup."
-    return 0
+  printf '\n%bVPSGuard %s acceptance completed%b\n' "$BOLD" "$VPSGUARD_VERSION" "$NC"
+  printf 'Install status: %s\n' "$INSTALL_STATUS"
+  printf 'Managed user: %s\n' "$NEW_USER"
+  printf 'Target SSH port: %s\n' "$SSH_PORT"
+  printf 'SSH runtime mode: %s\n' "$SSH_RUNTIME_MODE"
+  printf 'BBR status: %s\n' "$BBR_STATUS"
+  printf 'Test from a second terminal: ssh -p %s %s@%s\n' "$SSH_PORT" "$NEW_USER" "${server_ip:-SERVER_IP}"
+  printf '%bDo not close the current session until remote login and sudo are verified.%b\n' "$YELLOW" "$NC"
+  if [ "$INSTALL_STATUS" = "pending-port-finalization" ]; then
+    warn "Old SSH port ${ORIGINAL_SSH_PORT} is intentionally retained. Rerun VPSGuard after remote validation to finalize."
   fi
-
-  check_root_ssh_key
-  upgrade_system
-  create_user
-  setup_ssh_key
-  touch "$VPSGUARD_SSH_DONE_MARKER"
 }
 
-phase_4_ssh_hardening() {
-  if [ -f "$VPSGUARD_INSTALLED_MARKER" ]; then
-    info "SSH hardening already applied. Skipping."
-    return 0
-  fi
-
-  harden_ssh
-  configure_fail2ban
-}
-
-phase_5_sudo_configuration() {
-  if [ -f "$VPSGUARD_SUDO_DONE_MARKER" ]; then
-    info "Sudo configuration already completed. Skipping."
-    return 0
-  fi
-
-  configure_sudo
-  test_sudo_user
-  touch "$VPSGUARD_SUDO_DONE_MARKER"
-}
-
-phase_6_firewall_configuration() {
-  configure_ufw
-}
-
-phase_7_validation() {
-  final_check
-  touch "$VPSGUARD_INSTALLED_MARKER"
+remove_legacy_phase_markers() {
+  rm -f "${VPSGUARD_STATE_DIR}/.ssh_done" "${VPSGUARD_STATE_DIR}/.sudo_done" "${VPSGUARD_STATE_DIR}/.ufw_done"
 }
 
 main() {
-  phase_1_preflight_checks
-  phase_2_config_loading
-  phase_3_user_setup
+  require_root
+  check_ubuntu_lts
+  ensure_directory "$VPSGUARD_STATE_DIR" 700
+  prepare_sshd_runtime_directory
+  resolve_managed_user
+  resolve_ssh_ports
+  INSTALL_STATUS="failed"
+  write_config_env
+  record_preinstall_state
+  upgrade_system
+
+  ensure_managed_user
+  configure_authorized_keys
+  configure_sudo
+  verify_sudo_configuration || error "Sudo validation failed. SSH hardening was not started."
+  confirm_sudo_password_authentication
+
+  configure_ufw_before_ssh
+  configure_ssh_safely
+  configure_fail2ban
   enable_bbr
-  phase_4_ssh_hardening
-  phase_5_sudo_configuration
-  phase_6_firewall_configuration
-  phase_7_validation
+
+  run_final_acceptance || error "Final acceptance failed. The installed marker was not written; keep the current SSH session open."
+  remove_legacy_phase_markers
+  print_final_summary
 }
 
-main "$@"
+if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+  main "$@"
+fi
