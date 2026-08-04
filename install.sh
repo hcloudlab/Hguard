@@ -37,6 +37,7 @@ INSTALL_STATUS="failed"
 BBR_STATUS="unsupported"
 SSH_RUNTIME_MODE="unknown"
 SSH_SERVICE_UNIT=""
+FAIL2BAN_READY_ATTEMPTS=15
 SSHD_INCLUDE_BEGIN="# BEGIN VPSGuard managed include"
 SSHD_INCLUDE_END="# END VPSGuard managed include"
 
@@ -864,14 +865,13 @@ old=${ORIGINAL_SSH_PORT}
 }
 
 wait_for_fail2ban_sshd_jail() {
-  local max_attempts="${1:-15}"
   local attempt
 
-  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+  for ((attempt = 1; attempt <= FAIL2BAN_READY_ATTEMPTS; attempt++)); do
     if fail2ban-client status sshd >/dev/null 2>&1; then
       return 0
     fi
-    if [ "$attempt" -lt "$max_attempts" ]; then
+    if [ "$attempt" -lt "$FAIL2BAN_READY_ATTEMPTS" ]; then
       sleep 1
     fi
   done
