@@ -18,6 +18,7 @@ VPSGuard 不安装第三方内核，不自动重启服务器，也不会在卸�
 - 支持 `ssh.socket`、`ssh.service`、`sshd.service` 和传统 service 模式
 - 精确验证 SSH 监听端口及 UFW TCP 规则
 - 更换端口时保留旧监听和旧规则，直到第二终端登录被明确确认
+- 显式安装并验证 fail2ban systemd backend 依赖，兼容禁用推荐包的精简云镜像
 - 默认尝试启用发行版内核自带的 `fq + bbr`
 - 每次重跑检查真实状态并收敛，不再只根据 phase 标记跳过
 - 卸载只处理可识别的 VPSGuard 文件和记录过的规则

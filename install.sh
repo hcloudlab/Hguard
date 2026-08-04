@@ -523,7 +523,12 @@ upgrade_system() {
   info "Updating Ubuntu packages and installing VPSGuard dependencies..."
   apt update
   DEBIAN_FRONTEND=noninteractive apt upgrade -y
-  DEBIAN_FRONTEND=noninteractive apt install -y sudo curl wget git vim nano unzip ufw fail2ban htop jq ca-certificates gnupg lsb-release net-tools iproute2 openssh-server
+  DEBIAN_FRONTEND=noninteractive apt install -y sudo curl wget git vim nano unzip ufw fail2ban python3-systemd htop jq ca-certificates gnupg lsb-release net-tools iproute2 openssh-server
+}
+
+fail2ban_systemd_backend_available() {
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 -c 'import systemd.journal' >/dev/null 2>&1
 }
 
 ensure_managed_user() {
@@ -1413,6 +1418,8 @@ main() {
   # An OpenSSH package upgrade can remove /run/sshd while restarting the
   # socket-activated service. Recreate it before any post-upgrade sshd check.
   prepare_sshd_runtime_directory
+  fail2ban_systemd_backend_available \
+    || error "Fail2ban systemd backend dependency is unavailable after package installation. SSH hardening was not started."
 
   ensure_managed_user
   configure_authorized_keys

@@ -21,6 +21,7 @@ resolve_ssh_ports() { :; }
 write_config_env() { :; }
 record_preinstall_state() { :; }
 upgrade_system() { rm -rf "$VPSGUARD_RUN_ROOT/sshd"; }
+fail2ban_systemd_backend_available() { :; }
 ensure_managed_user() { :; }
 configure_authorized_keys() { :; }
 configure_sudo() { :; }
