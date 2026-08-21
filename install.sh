@@ -8,7 +8,7 @@ set -euo pipefail
 VPSGUARD_VERSION="0.3.6"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
 LOCAL_CORE="${SCRIPT_DIR}/install-core.sh"
-CORE_URL="https://raw.githubusercontent.com/hcloudlab/vpsguard/main/install-core.sh"
+CORE_URL="https://raw.githubusercontent.com/hcloudlab/vpsguard/7bad2718022b61139e1344c55a2e619608c530ac/install.sh"
 TEMP_CORE=""
 
 cleanup() {
@@ -23,7 +23,7 @@ resolve_core() {
   fi
 
   command -v curl >/dev/null 2>&1 || {
-    printf '[ERROR] curl is required to load VPSGuard install-core.sh.\n' >&2
+    printf '[ERROR] curl is required to load the VPSGuard core installer.\n' >&2
     exit 1
   }
   TEMP_CORE="$(mktemp /tmp/vpsguard-install-core.XXXXXX)"
@@ -43,22 +43,15 @@ if [ "${VPSGUARD_TEST_MODE:-0}" = "1" ]; then
 fi
 
 # Preserve the existing standalone/help interfaces exactly. Unknown argument
-# combinations are delegated to install-core.sh so its validation remains the
-# single source of truth.
+# combinations are delegated to the core so its validation remains the single
+# source of truth.
 if [ "$#" -gt 0 ]; then
-  case "$1" in
-    --optimize-conntrack|-h|--help)
-      exec bash "$CORE_SCRIPT" "$@"
-      ;;
-    *)
-      exec bash "$CORE_SCRIPT" "$@"
-      ;;
-  esac
+  exec bash "$CORE_SCRIPT" "$@"
 fi
 
 # Normal VPSGuard installation now includes the conntrack capacity fix by
-# default. install-core.sh keeps the safety properties already validated in
-# v0.3.6: user-owned conntrack configuration is preserved, existing higher
-# max/hashsize values are never lowered, and no reboot/module unload is forced.
+# default. The core keeps the safety properties already validated in v0.3.6:
+# user-owned conntrack configuration is preserved, existing higher max/hashsize
+# values are never lowered, and no reboot/module unload is forced.
 bash "$CORE_SCRIPT" --optimize-conntrack
 exec bash "$CORE_SCRIPT"
