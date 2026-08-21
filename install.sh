@@ -27,13 +27,16 @@ resolve_core() {
     return 0
   fi
 
-  command -v curl >/dev/null 2>&1 || {
-    printf '[ERROR] curl is required to load the VPSGuard core installer.\n' >&2
-    exit 1
-  }
   TEMP_CORE="$(mktemp /tmp/vpsguard-install-core.XXXXXX)"
-  curl -fsSL --proto '=https' --tlsv1.2 \
-    "$CORE_URL" -o "$TEMP_CORE"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --proto '=https' --tlsv1.2 \
+      "$CORE_URL" -o "$TEMP_CORE"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$TEMP_CORE" "$CORE_URL"
+  else
+    printf '[ERROR] curl or wget is required to load the VPSGuard core installer.\n' >&2
+    exit 1
+  fi
   printf '%s\n' "$TEMP_CORE"
 }
 
