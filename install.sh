@@ -5,8 +5,13 @@ set -euo pipefail
 # Default entrypoint. A normal install applies the validated conntrack profile
 # before continuing with the existing SSH/UFW/fail2ban/BBR hardening flow.
 
+# shellcheck disable=SC2034
 VPSGUARD_VERSION="0.3.6"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+if SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"; then
+  :
+else
+  SCRIPT_DIR=""
+fi
 LOCAL_CORE="${SCRIPT_DIR}/install-core.sh"
 CORE_URL="https://raw.githubusercontent.com/hcloudlab/vpsguard/7bad2718022b61139e1344c55a2e619608c530ac/install.sh"
 TEMP_CORE=""
@@ -37,8 +42,10 @@ CORE_SCRIPT="$(resolve_core)"
 # Isolated repository tests source install.sh to access the implementation
 # functions. Preserve that contract without executing the wrapper workflow.
 if [ "${VPSGUARD_TEST_MODE:-0}" = "1" ]; then
+  # shellcheck source=install-core.sh
   # shellcheck disable=SC1090
   . "$CORE_SCRIPT"
+  # shellcheck disable=SC2317
   return 0 2>/dev/null || exit 0
 fi
 
