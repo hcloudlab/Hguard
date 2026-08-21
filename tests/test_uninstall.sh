@@ -13,6 +13,24 @@ export VPSGUARD_MANAGED_RULES="$VPSGUARD_STATE_DIR/managed-rules"
 # shellcheck source=uninstall.sh
 . "$TEST_ROOT/uninstall.sh"
 
+create_managed_conntrack_artifacts() {
+  mkdir -p "$(dirname "$CONNTRACK_SYSCTL_FILE")" "$(dirname "$CONNTRACK_MODPROBE_FILE")"
+  printf '# Managed by VPSGuard 0.3.6\nnet.netfilter.nf_conntrack_tcp_timeout_syn_sent = 30\n' > "$CONNTRACK_SYSCTL_FILE"
+  printf '# Managed by VPSGuard 0.3.6\noptions nf_conntrack hashsize=16384\n' > "$CONNTRACK_MODPROBE_FILE"
+  mkdir -p "$(dirname "$CONNTRACK_MODULES_FILE")" "$(dirname "$CONNTRACK_HELPER_FILE")" "$(dirname "$CONNTRACK_SERVICE_FILE")"
+  printf '# Managed by VPSGuard 0.3.6\nnf_conntrack\n' > "$CONNTRACK_MODULES_FILE"
+  printf '# Managed by VPSGuard 0.3.6\n' > "$CONNTRACK_HELPER_FILE"
+  printf '# Managed by VPSGuard 0.3.6\n[Service]\nType=oneshot\nRemainAfterExit=yes\n' > "$CONNTRACK_SERVICE_FILE"
+}
+
+assert_conntrack_artifacts_absent() {
+  [ ! -e "$CONNTRACK_SYSCTL_FILE" ] || fail "managed conntrack sysctl file was not removed"
+  [ ! -e "$CONNTRACK_MODPROBE_FILE" ] || fail "managed conntrack modprobe file was not removed"
+  [ ! -e "$CONNTRACK_MODULES_FILE" ] || fail "managed conntrack modules-load file was not removed"
+  [ ! -e "$CONNTRACK_HELPER_FILE" ] || fail "managed conntrack helper file was not removed"
+  [ ! -e "$CONNTRACK_SERVICE_FILE" ] || fail "managed conntrack systemd unit was not removed"
+}
+
 managed="$temporary_root/managed.conf"
 foreign="$temporary_root/foreign.conf"
 printf '# Managed by VPSGuard 0.3.5\nvalue\n' > "$managed"
@@ -21,6 +39,97 @@ remove_owned_file "$managed"
 remove_owned_file "$foreign"
 [ ! -e "$managed" ] || fail "managed file was not removed"
 [ -e "$foreign" ] || fail "foreign file was removed"
+
+create_managed_conntrack_artifacts
+systemctl_log="$temporary_root/systemctl.log"
+systemctl() {
+  printf '%s\n' "$*" >> "$systemctl_log"
+}
+VPSGUARD_TEST_MODE=0
+disable_owned_unit "$CONNTRACK_SERVICE_FILE" "$CONNTRACK_SERVICE_NAME"
+VPSGUARD_TEST_MODE=1
+assert_file_contains "$systemctl_log" "stop $CONNTRACK_SERVICE_NAME"
+assert_file_contains "$systemctl_log" "disable $CONNTRACK_SERVICE_NAME"
+assert_file_contains "$systemctl_log" 'daemon-reload'
+remove_owned_file "$CONNTRACK_SYSCTL_FILE"
+remove_owned_file "$CONNTRACK_MODPROBE_FILE"
+remove_owned_file "$CONNTRACK_MODULES_FILE"
+remove_owned_file "$CONNTRACK_HELPER_FILE"
+remove_owned_file "$CONNTRACK_SERVICE_FILE"
+assert_conntrack_artifacts_absent
+
+printf '# custom kernel policy\nnet.netfilter.nf_conntrack_max = 131072\n' > "$CONNTRACK_SYSCTL_FILE"
+remove_owned_file "$CONNTRACK_SYSCTL_FILE"
+[ -e "$CONNTRACK_SYSCTL_FILE" ] || fail "foreign conntrack sysctl file was removed"
+
+printf '# custom unit\n' > "$CONNTRACK_SERVICE_FILE"
+rm -f "$systemctl_log"
+VPSGUARD_TEST_MODE=0
+disable_owned_unit "$CONNTRACK_SERVICE_FILE" "$CONNTRACK_SERVICE_NAME"
+VPSGUARD_TEST_MODE=1
+[ -e "$CONNTRACK_SERVICE_FILE" ] || fail "foreign conntrack systemd unit was removed"
+[ ! -e "$systemctl_log" ] || fail "foreign conntrack systemd unit triggered systemctl"
+
+rm -rf "${temporary_root:?}/etc" "$systemctl_log"
+mkdir -p "$temporary_root/runtime"
+printf '131072\n' > "$temporary_root/runtime/nf_conntrack_max"
+printf '32768\n' > "$temporary_root/runtime/hashsize"
+printf '120\n' > "$temporary_root/runtime/syn_sent"
+create_managed_conntrack_artifacts
+id() {
+  if [ "${1:-}" = "-u" ]; then
+    printf '0\n'
+  else
+    printf 'existingadmin sudo\n'
+  fi
+}
+VPSGUARD_TEST_MODE=0
+( main )
+VPSGUARD_TEST_MODE=1
+assert_conntrack_artifacts_absent
+[ ! -d "$VPSGUARD_STATE_DIR" ] || fail "empty conntrack-only state directory was not removed"
+assert_equal 131072 "$(cat "$temporary_root/runtime/nf_conntrack_max")" "conntrack-only cleanup preserves runtime max"
+assert_equal 32768 "$(cat "$temporary_root/runtime/hashsize")" "conntrack-only cleanup preserves runtime hashsize"
+assert_equal 120 "$(cat "$temporary_root/runtime/syn_sent")" "conntrack-only cleanup preserves runtime timeout"
+assert_file_contains "$systemctl_log" "stop $CONNTRACK_SERVICE_NAME"
+assert_file_contains "$systemctl_log" "disable $CONNTRACK_SERVICE_NAME"
+assert_file_contains "$systemctl_log" 'daemon-reload'
+
+rm -rf "${temporary_root:?}/etc" "$systemctl_log"
+mkdir -p "$(dirname "$CONNTRACK_SYSCTL_FILE")" "$(dirname "$CONNTRACK_MODPROBE_FILE")" "$(dirname "$CONNTRACK_MODULES_FILE")" "$(dirname "$CONNTRACK_HELPER_FILE")" "$(dirname "$CONNTRACK_SERVICE_FILE")"
+printf '# custom sysctl\n' > "$CONNTRACK_SYSCTL_FILE"
+printf '# custom modprobe\n' > "$CONNTRACK_MODPROBE_FILE"
+printf '# custom modules-load\n' > "$CONNTRACK_MODULES_FILE"
+printf '# custom helper\n' > "$CONNTRACK_HELPER_FILE"
+printf '# custom unit\n' > "$CONNTRACK_SERVICE_FILE"
+cleanup_conntrack_artifacts
+[ -e "$CONNTRACK_SYSCTL_FILE" ] || fail "foreign same-name conntrack sysctl was removed"
+[ -e "$CONNTRACK_MODPROBE_FILE" ] || fail "foreign same-name conntrack modprobe was removed"
+[ -e "$CONNTRACK_MODULES_FILE" ] || fail "foreign same-name conntrack modules-load was removed"
+[ -e "$CONNTRACK_HELPER_FILE" ] || fail "foreign same-name conntrack helper was removed"
+[ -e "$CONNTRACK_SERVICE_FILE" ] || fail "foreign same-name conntrack unit was removed"
+
+rm -rf "${temporary_root:?}/etc" "$systemctl_log"
+untracked_error="$temporary_root/untracked.err"
+if ( main ) 2> "$untracked_error"; then
+  fail "configless uninstall without conntrack artifacts succeeded"
+fi
+assert_file_contains "$untracked_error" 'refusing an untracked uninstall'
+
+rm -rf "${temporary_root:?}/etc" "$systemctl_log"
+mkdir -p "$VPSGUARD_STATE_DIR"
+printf "NEW_USER='trackedadmin'\nSSH_PORT='22'\nORIGINAL_SSH_PORT='22'\nSUDO_MODE='password'\n" > "$VPSGUARD_CONFIG_FILE"
+tracked_log="$temporary_root/tracked.log"
+(
+  remove_safe_ufw_rules() { printf 'ufw\n' >> "$tracked_log"; }
+  remove_fail2ban_jail_safely() { printf 'fail2ban\n' >> "$tracked_log"; }
+  remove_ssh_snippet_safely() { printf 'ssh\n' >> "$tracked_log"; }
+  main <<< "UNINSTALL"
+)
+assert_file_contains "$tracked_log" 'ufw'
+assert_file_contains "$tracked_log" 'fail2ban'
+assert_file_contains "$tracked_log" 'ssh'
+[ ! -e "$VPSGUARD_CONFIG_FILE" ] || fail "tracked uninstall did not remove config"
 
 mkdir -p "$VPSGUARD_STATE_DIR"
 printf '# UFW rules added by VPSGuard\n22/tcp\n2222/tcp\n' > "$VPSGUARD_MANAGED_RULES"
@@ -41,6 +150,7 @@ fi
 if grep -Eq 'systemctl (stop|disable) fail2ban|ufw (--force )?(disable|reset)|userdel|deluser' "$TEST_ROOT/uninstall.sh"; then
   fail "unsafe global disable/reset or user deletion remains in uninstall.sh"
 fi
+assert_file_contains "$TEST_ROOT/uninstall.sh" 'systemctl disable'
 
 mkdir -p "$SUDOERS_DIR"
 sudoers_file="${SUDOERS_DIR}/vpsguard-existingadmin"

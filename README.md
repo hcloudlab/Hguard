@@ -1,4 +1,4 @@
-# VPSGuard v0.3.5
+# VPSGuard v0.3.6
 
 VPSGuard 是面向 Ubuntu LTS 新 VPS 的 Bash 初始化与 SSH 安全加固工具。它创建或复用一个由用户明确指定的管理员账户，配置 SSH 公钥、sudo、UFW、fail2ban，并在内核支持时启用 Linux 原生 BBR。
 
@@ -20,6 +20,8 @@ VPSGuard 不安装第三方内核，不自动重启服务器，也不会在卸�
 - 更换端口时保留旧监听和旧规则，直到第二终端登录被明确确认
 - 显式安装并验证 fail2ban systemd backend 依赖，兼容禁用推荐包的精简云镜像
 - 默认尝试启用发行版内核自带的 `fq + bbr`
+- 默认只读检测 Linux Netfilter conntrack 使用率，以及当前可访问 kernel logs 中是否存在 table exhaustion 证据
+- 仅在显式执行 `--optimize-conntrack` 时写入独立 conntrack 配置
 - 每次重跑检查真实状态并收敛，不再只根据 phase 标记跳过
 - 卸载只处理可识别的 VPSGuard 文件和记录过的规则
 
@@ -252,6 +254,79 @@ sysctl net.core.default_qdisc
 
 BBR 不保证降低物理延迟、消除丢包或让所有线路提速。
 
+## Conntrack 健康检查
+
+Linux Netfilter conntrack 是内核用于跟踪网络连接状态的全局表。大量新连接、扫描、健康检查、TCP 探测、NAT 或高并发服务，都可能让 conntrack 状态快速增长；这不是某个单一应用或协议独有的问题。
+
+conntrack 表耗尽时，常见表现包括：
+
+- 新 TCP/UDP 连接失败；
+- 应用服务本身仍在运行；
+- CPU 和 RAM 可能仍然正常；
+- `dmesg` 或 kernel journal 出现 `nf_conntrack: table full, dropping packet`。
+
+VPSGuard 默认只检测和告警，不会因为 `nf_conntrack_max` 看起来较小就自动修改内核参数。普通个人 VPS 当前连接数很低时，小上限本身不等于故障；VPSGuard 的判断依据是当前使用率，以及当前可访问的 kernel logs 中是否检测到 conntrack table exhaustion。未检测到只表示当前可访问日志没有证据，不代表系统实际没有发生过。
+
+查看状态：
+
+```bash
+sudo bash status.sh
+```
+
+示例输出：
+
+```text
+==> Conntrack
+Usage: 51674 / 65536 (78.9%)
+Hash buckets: 16384
+Table exhaustion found in accessible kernel logs: no
+Health: WARNING
+Runtime profile: active
+Persistent sysctl config: present
+modprobe hashsize config: present
+modules-load config: present
+runtime helper: present
+systemd runtime unit: present
+```
+
+安装结束时也会执行一次只读检查，例如：
+
+```text
+[OK] Conntrack usage: 0.4% (126 / 32768); hash buckets: 8192.
+```
+
+只有明确执行以下命令时，VPSGuard 才会写入推荐 conntrack 配置：
+
+```bash
+sudo bash install.sh --optimize-conntrack
+```
+
+`--optimize-conntrack` 可以独立使用；即使尚未完成 VPSGuard 主机加固安装，也可以单独部署和管理 conntrack profile。
+
+优化使用独立管理文件：
+
+```text
+/etc/sysctl.d/99-vpsguard-conntrack.conf
+/etc/modprobe.d/vpsguard-nf-conntrack.conf
+/etc/modules-load.d/vpsguard-conntrack.conf
+/etc/vpsguard/apply-conntrack-profile.sh
+/etc/systemd/system/vpsguard-conntrack.service
+```
+
+保守策略：
+
+- VPSGuard 可选 conntrack profile 对小型普通 VPS 使用的最低目标是 `nf_conntrack_max >= 65536` 和 `hashsize >= 16384`；
+- 如果当前有效值已经更高，VPSGuard 绝不降低；
+- `nf_conntrack_max` 使用 systemd oneshot/helper 做动态 floor：运行值低于 `65536` 时才提高，已经是 `65536` 或更高时保持不动；
+- `/etc/modules-load.d/vpsguard-conntrack.conf` 会让 `nf_conntrack` 在 `systemd-sysctl` 前加载，避免 Ubuntu 24.04 上 sysctl key 尚不存在而被忽略；
+- `/etc/sysctl.d/99-vpsguard-conntrack.conf` 只持久化三个 timeout，不再写静态 `net.netfilter.nf_conntrack_max = 65536`；
+- 仅管理 `nf_conntrack_max`、`nf_conntrack_tcp_timeout_syn_sent`、`nf_conntrack_tcp_timeout_syn_recv`、`nf_conntrack_tcp_timeout_time_wait` 和 `nf_conntrack hashsize`；
+- timeout 是 Netfilter conntrack 记录超时，不是 TCP socket 自身的 TIME_WAIT 参数；
+- 不修改 `tcp_tw_reuse`、UFW 443 行为、服务限速或其他网络优化教程参数；
+- 如果发现用户已有 conntrack sysctl/modprobe 配置，VPSGuard 会报告并保留，不静默覆盖。
+
+`hashsize` 持久化依赖 `modprobe.d`，通常需要下次加载模块或重启后确认。VPSGuard 不会为了应用 hashsize 卸载 `nf_conntrack` 模块，也不会自动重启服务器。`status.sh` 会显示 `Runtime profile: active`、`Runtime profile: drift detected`、`not configured` 或 `unavailable`；如果持久化文件存在但 reboot 后 timeout 恢复默认值，会明确显示 drift。
+
 ## 状态检查
 
 ```bash
@@ -269,6 +344,7 @@ sudo bash status.sh
 - UFW 新旧端口规则
 - fail2ban 服务和 VPSGuard jail
 - BBR 支持、可用算法、当前算法、qdisc 和持久化文件
+- conntrack 当前数量、上限、使用率、hash buckets、当前可访问 kernel logs 中的 table exhaustion 证据和健康等级
 
 它不会输出完整公钥、密码、Token 或私钥。
 
@@ -290,9 +366,14 @@ VPSGuard 首次修改系统前会记录：
 /etc/sudoers.d/vpsguard-<username>               # 仅免密码 sudo 模式
 /etc/sysctl.d/99-vpsguard-bbr.conf
 /etc/modules-load.d/vpsguard-bbr.conf
+/etc/sysctl.d/99-vpsguard-conntrack.conf          # 仅显式优化 conntrack 后
+/etc/modprobe.d/vpsguard-nf-conntrack.conf        # 仅显式优化 conntrack 后
+/etc/modules-load.d/vpsguard-conntrack.conf       # 仅显式优化 conntrack 后
+/etc/vpsguard/apply-conntrack-profile.sh          # 仅显式优化 conntrack 后
+/etc/systemd/system/vpsguard-conntrack.service    # 仅显式优化 conntrack 后
 ```
 
-VPSGuard 不删除未知 SSH 片段、未知 systemd socket override、未知 fail2ban jail 或其他软件的 BBR 配置。主 `sshd_config` 中只维护带明确起止标记的首行 Include 区块。
+VPSGuard 不删除未知 SSH 片段、未知 systemd socket override、未知 fail2ban jail、其他软件的 BBR 配置或用户自定义 conntrack 配置。主 `sshd_config` 中只维护带明确起止标记的首行 Include 区块。
 
 ## 安全卸载
 
@@ -318,6 +399,7 @@ UNINSTALL
 - 只考虑删除记录过的 UFW 规则，并始终保留当前 SSH 端口规则
 - SSH 端口已改变或仍待确认时，保留 SSH 片段和状态，避免远程失联
 - 删除 BBR 持久化文件时不强制切换拥塞算法、不重启 VPS
+- 删除 VPSGuard 管理的 conntrack sysctl、modprobe、modules-load、systemd unit 和 helper 时，会在 ownership 确认后先 stop + disable managed systemd unit，再删除对应文件并执行 daemon-reload；出于远程服务器安全考虑，不主动降低当前运行中的 `nf_conntrack_max`、`hashsize` 或 timeout，不卸载 `nf_conntrack`、不重启 VPS；未知 conntrack 配置始终保留，恢复到系统或其他持久化配置的最终值可能需要 reboot
 
 安全条件不足时会返回部分卸载，并保留必要状态供人工处理。
 
@@ -337,7 +419,7 @@ GitHub Actions 在 Ubuntu 22.04 和 24.04 runner 上执行同样的静态与隔�
 
 ## 版本与许可
 
-- 当前版本：`0.3.5`
+- 当前版本：`0.3.6`
 - 更新记录：[CHANGELOG.md](CHANGELOG.md)
 - 许可：[MIT](LICENSE)
 - 仓库：[github.com/hcloudlab/vpsguard](https://github.com/hcloudlab/vpsguard)

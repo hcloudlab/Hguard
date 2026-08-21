@@ -15,6 +15,11 @@ export VPSGUARD_SSHD_CONFIG="$temporary_root/etc/ssh/sshd_config.d/00-vpsguard.c
 export BBR_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-vpsguard-bbr.conf"
 export BBR_MODULES_FILE="$temporary_root/etc/modules-load.d/vpsguard-bbr.conf"
 export BBR_MODULE_PERSISTENCE_REQUIRED=true
+export CONNTRACK_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-vpsguard-conntrack.conf"
+export CONNTRACK_MODPROBE_FILE="$temporary_root/etc/modprobe.d/vpsguard-nf-conntrack.conf"
+export CONNTRACK_MODULES_FILE="$temporary_root/etc/modules-load.d/vpsguard-conntrack.conf"
+export CONNTRACK_HELPER_FILE="$temporary_root/etc/vpsguard/apply-conntrack-profile.sh"
+export CONNTRACK_SERVICE_FILE="$temporary_root/etc/systemd/system/vpsguard-conntrack.service"
 # shellcheck source=install.sh
 . "$TEST_ROOT/install.sh"
 
@@ -27,17 +32,19 @@ INSTALL_STATUS='pending-port-finalization'
 write_config_env
 write_vpsguard_sshd_config true
 write_bbr_files
+write_conntrack_files 16384
 record_managed_rule '2222/tcp'
-first="$(cksum "$VPSGUARD_CONFIG_FILE" "$VPSGUARD_SSHD_CONFIG" "$BBR_SYSCTL_FILE" "$BBR_MODULES_FILE" "$VPSGUARD_MANAGED_RULES")"
+first="$(cksum "$VPSGUARD_CONFIG_FILE" "$VPSGUARD_SSHD_CONFIG" "$BBR_SYSCTL_FILE" "$BBR_MODULES_FILE" "$CONNTRACK_SYSCTL_FILE" "$CONNTRACK_MODPROBE_FILE" "$CONNTRACK_MODULES_FILE" "$CONNTRACK_HELPER_FILE" "$CONNTRACK_SERVICE_FILE" "$VPSGUARD_MANAGED_RULES")"
 assert_equal password "$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE)" "persisted sudo mode"
 
 for _iteration in {1..10}; do
   write_config_env
   write_vpsguard_sshd_config true
   write_bbr_files
+  write_conntrack_files 16384
   record_managed_rule '2222/tcp'
 done
 
-last="$(cksum "$VPSGUARD_CONFIG_FILE" "$VPSGUARD_SSHD_CONFIG" "$BBR_SYSCTL_FILE" "$BBR_MODULES_FILE" "$VPSGUARD_MANAGED_RULES")"
+last="$(cksum "$VPSGUARD_CONFIG_FILE" "$VPSGUARD_SSHD_CONFIG" "$BBR_SYSCTL_FILE" "$BBR_MODULES_FILE" "$CONNTRACK_SYSCTL_FILE" "$CONNTRACK_MODPROBE_FILE" "$CONNTRACK_MODULES_FILE" "$CONNTRACK_HELPER_FILE" "$CONNTRACK_SERVICE_FILE" "$VPSGUARD_MANAGED_RULES")"
 assert_equal "$first" "$last" "ten-run convergence"
 pass "10 consecutive simulated runs converge without content drift"

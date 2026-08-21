@@ -15,6 +15,11 @@ export VPSGUARD_SSHD_CONFIG="$temporary_root/etc/ssh/sshd_config.d/00-vpsguard.c
 export FAIL2BAN_JAIL="$temporary_root/etc/fail2ban/jail.d/vpsguard-sshd.local"
 export BBR_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-vpsguard-bbr.conf"
 export BBR_MODULES_FILE="$temporary_root/etc/modules-load.d/vpsguard-bbr.conf"
+export CONNTRACK_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-vpsguard-conntrack.conf"
+export CONNTRACK_MODPROBE_FILE="$temporary_root/etc/modprobe.d/vpsguard-nf-conntrack.conf"
+export CONNTRACK_MODULES_FILE="$temporary_root/etc/modules-load.d/vpsguard-conntrack.conf"
+export CONNTRACK_HELPER_FILE="$temporary_root/etc/vpsguard/apply-conntrack-profile.sh"
+export CONNTRACK_SERVICE_FILE="$temporary_root/etc/systemd/system/vpsguard-conntrack.service"
 # shellcheck source=install.sh
 . "$TEST_ROOT/install.sh"
 
@@ -24,6 +29,11 @@ record_preinstall_state
 first_state="$(checksum_file "$VPSGUARD_STATE_FILE")"
 record_preinstall_state
 assert_equal "$first_state" "$(checksum_file "$VPSGUARD_STATE_FILE")" "original state snapshot"
+assert_file_contains "$VPSGUARD_STATE_FILE" "CONNTRACK_SYSCTL_PREEXISTED='false'"
+assert_file_contains "$VPSGUARD_STATE_FILE" "CONNTRACK_MODPROBE_PREEXISTED='false'"
+assert_file_contains "$VPSGUARD_STATE_FILE" "CONNTRACK_MODULES_PREEXISTED='false'"
+assert_file_contains "$VPSGUARD_STATE_FILE" "CONNTRACK_HELPER_PREEXISTED='false'"
+assert_file_contains "$VPSGUARD_STATE_FILE" "CONNTRACK_SERVICE_PREEXISTED='false'"
 
 record_managed_rule '22/tcp'
 record_managed_rule '22/tcp'

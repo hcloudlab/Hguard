@@ -2,6 +2,33 @@
 
 All notable changes to VPSGuard are documented here.
 
+## [0.3.6] - 2026-08-21
+
+### Added
+
+- Add a conntrack health check to `status.sh`, including current count, maximum, usage percentage, hash buckets, conntrack table-exhaustion evidence in currently accessible kernel logs, and `OK` / `NOTICE` / `WARNING` / `CRITICAL` / `UNAVAILABLE` status.
+- Add a read-only conntrack check at the end of installation; default installs do not modify conntrack kernel parameters.
+- Add explicit `sudo bash install.sh --optimize-conntrack` support for a conservative VPSGuard-managed conntrack profile.
+- Add dedicated managed files for optional conntrack optimization: `/etc/sysctl.d/99-vpsguard-conntrack.conf`, `/etc/modprobe.d/vpsguard-nf-conntrack.conf`, `/etc/modules-load.d/vpsguard-conntrack.conf`, `/etc/vpsguard/apply-conntrack-profile.sh`, and `/etc/systemd/system/vpsguard-conntrack.service`.
+
+### Security
+
+- Preserve user-owned conntrack sysctl/modprobe configuration and refuse to silently overwrite it.
+- Never lower an existing `nf_conntrack_max` or `hashsize` value when applying the optional profile.
+- Avoid unloading `nf_conntrack` or changing UFW service-port behavior while applying conntrack settings.
+- Extend uninstall cleanup to remove only recognizable VPSGuard-managed conntrack files while preserving unknown user configuration.
+
+### Fixed
+
+- Fix Ubuntu 24.04 reboot persistence for conntrack timeouts by loading `nf_conntrack` before `systemd-sysctl` and adding a VPSGuard-managed systemd oneshot/helper for runtime profile application.
+- Replace static `net.netfilter.nf_conntrack_max = 65536` persistence with a dynamic runtime floor that raises values below `65536` and preserves `65536` or higher.
+- Report `Runtime profile: drift detected` in `status.sh` when VPSGuard conntrack config exists but runtime max, hashsize, or timeout values do not match the opt-in profile.
+- Add standalone conntrack cleanup so managed conntrack artifacts can still be safely removed when the main VPSGuard config is missing, and stop the `RemainAfterExit` oneshot before deleting it to avoid an `active (exited)` residue after uninstall.
+
+### Testing
+
+- Add isolated conntrack tests for normal, notice, warning, critical, table-full, unavailable, high-existing-value, custom-config protection, module-before-sysctl boot ordering, dynamic max floor, timeout drift, reboot-equivalent helper apply, idempotency, and uninstall behavior.
+
 ## [0.3.5] - 2026-08-04
 
 ### Security
@@ -57,5 +84,6 @@ All notable changes to VPSGuard are documented here.
 
 - Enabled best-effort native BBR configuration and added basic BBR status output.
 
+[0.3.6]: https://github.com/hcloudlab/vpsguard/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/hcloudlab/vpsguard/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/hcloudlab/vpsguard/releases/tag/v0.3.4

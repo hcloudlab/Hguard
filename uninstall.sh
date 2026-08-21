@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VPSGUARD_VERSION="0.3.5"
+VPSGUARD_VERSION="0.3.6"
 VPSGUARD_TEST_MODE="${VPSGUARD_TEST_MODE:-0}"
 VPSGUARD_ETC_ROOT="${VPSGUARD_ETC_ROOT:-/etc}"
 VPSGUARD_STATE_DIR="${VPSGUARD_STATE_DIR:-${VPSGUARD_ETC_ROOT}/vpsguard}"
@@ -18,6 +18,12 @@ FAIL2BAN_JAIL="${FAIL2BAN_JAIL:-${VPSGUARD_ETC_ROOT}/fail2ban/jail.d/vpsguard-ss
 SUDOERS_DIR="${SUDOERS_DIR:-${VPSGUARD_ETC_ROOT}/sudoers.d}"
 BBR_SYSCTL_FILE="${BBR_SYSCTL_FILE:-${VPSGUARD_ETC_ROOT}/sysctl.d/99-vpsguard-bbr.conf}"
 BBR_MODULES_FILE="${BBR_MODULES_FILE:-${VPSGUARD_ETC_ROOT}/modules-load.d/vpsguard-bbr.conf}"
+CONNTRACK_SYSCTL_FILE="${CONNTRACK_SYSCTL_FILE:-${VPSGUARD_ETC_ROOT}/sysctl.d/99-vpsguard-conntrack.conf}"
+CONNTRACK_MODPROBE_FILE="${CONNTRACK_MODPROBE_FILE:-${VPSGUARD_ETC_ROOT}/modprobe.d/vpsguard-nf-conntrack.conf}"
+CONNTRACK_MODULES_FILE="${CONNTRACK_MODULES_FILE:-${VPSGUARD_ETC_ROOT}/modules-load.d/vpsguard-conntrack.conf}"
+CONNTRACK_HELPER_FILE="${CONNTRACK_HELPER_FILE:-${VPSGUARD_STATE_DIR}/apply-conntrack-profile.sh}"
+CONNTRACK_SERVICE_NAME="${CONNTRACK_SERVICE_NAME:-vpsguard-conntrack.service}"
+CONNTRACK_SERVICE_FILE="${CONNTRACK_SERVICE_FILE:-${SYSTEMD_SYSTEM_DIR}/${CONNTRACK_SERVICE_NAME}}"
 
 GREEN="\033[32m"
 YELLOW="\033[33m"
@@ -106,6 +112,58 @@ remove_owned_file() {
   elif [ -e "$file" ]; then
     warn "Preserved unrecognized file: ${file}"
   fi
+}
+
+disable_owned_unit() {
+  local unit_file="$1"
+  local unit_name="$2"
+
+  if managed_file_is_owned "$unit_file"; then
+    if [ "$VPSGUARD_TEST_MODE" != "1" ] && command -v systemctl >/dev/null 2>&1; then
+      systemctl stop "$unit_name" >/dev/null 2>&1 || warn "Could not stop ${unit_name}; removing the managed unit file anyway."
+      systemctl disable "$unit_name" >/dev/null 2>&1 || warn "Could not disable ${unit_name}; removing the managed unit file anyway."
+      systemctl daemon-reload || warn "systemctl daemon-reload failed after disabling ${unit_name}."
+    fi
+  elif [ -e "$unit_file" ]; then
+    warn "Preserved unrecognized unit file: ${unit_file}"
+  fi
+}
+
+reload_systemd_after_conntrack_cleanup() {
+  if [ "$VPSGUARD_TEST_MODE" != "1" ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload || warn "systemctl daemon-reload failed after conntrack cleanup."
+  fi
+}
+
+conntrack_managed_artifact_exists() {
+  managed_file_is_owned "$CONNTRACK_SYSCTL_FILE" \
+    || managed_file_is_owned "$CONNTRACK_MODPROBE_FILE" \
+    || managed_file_is_owned "$CONNTRACK_MODULES_FILE" \
+    || managed_file_is_owned "$CONNTRACK_SERVICE_FILE" \
+    || managed_file_is_owned "$CONNTRACK_HELPER_FILE"
+}
+
+cleanup_empty_state_dir() {
+  [ -d "$VPSGUARD_STATE_DIR" ] || return 0
+  rmdir "$VPSGUARD_STATE_DIR" 2>/dev/null || true
+}
+
+cleanup_conntrack_artifacts() {
+  disable_owned_unit "$CONNTRACK_SERVICE_FILE" "$CONNTRACK_SERVICE_NAME"
+  remove_owned_file "$CONNTRACK_SYSCTL_FILE"
+  remove_owned_file "$CONNTRACK_MODPROBE_FILE"
+  remove_owned_file "$CONNTRACK_MODULES_FILE"
+  remove_owned_file "$CONNTRACK_SERVICE_FILE"
+  remove_owned_file "$CONNTRACK_HELPER_FILE"
+  reload_systemd_after_conntrack_cleanup
+  warn "Runtime nf_conntrack_max, hashsize and timeout values were not forced downward; reboot may be required for system or other persistent configuration to become effective."
+}
+
+cleanup_conntrack_only_without_config() {
+  printf '\n%bVPSGuard %s conntrack cleanup%b\n' "$BOLD" "$VPSGUARD_VERSION" "$NC"
+  cleanup_conntrack_artifacts
+  cleanup_empty_state_dir
+  info "Conntrack-only cleanup completed."
 }
 
 remove_safe_ufw_rules() {
@@ -297,7 +355,13 @@ main() {
   if ! target_port="$(read_env_value "$VPSGUARD_CONFIG_FILE" SSH_PORT 2>/dev/null)"; then target_port=""; fi
   if ! original_port="$(read_env_value "$VPSGUARD_CONFIG_FILE" ORIGINAL_SSH_PORT 2>/dev/null)"; then original_port=""; fi
   if ! sudo_mode="$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE 2>/dev/null)"; then sudo_mode="password"; fi
-  [ -n "$managed_user" ] || error "VPSGuard config is missing or invalid; refusing an untracked uninstall."
+  if [ -z "$managed_user" ]; then
+    if conntrack_managed_artifact_exists; then
+      cleanup_conntrack_only_without_config
+      return 0
+    fi
+    error "VPSGuard config is missing or invalid; refusing an untracked uninstall."
+  fi
   case "$sudo_mode" in
     password|passwordless) ;;
     *) error "VPSGuard config contains an invalid SUDO_MODE; refusing an untracked sudoers change." ;;
@@ -320,6 +384,7 @@ main() {
   remove_owned_file "$BBR_SYSCTL_FILE"
   remove_owned_file "$BBR_MODULES_FILE"
   warn "Current kernel congestion-control state was not forced to another algorithm and no reboot was performed."
+  cleanup_conntrack_artifacts
 
   if [ "$sudo_mode" = "passwordless" ]; then
     if ! remove_passwordless_sudoers_safely "$managed_user"; then

@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# VPSGuard v0.3.5
+# VPSGuard v0.3.6
 # Ubuntu LTS initialization and SSH hardening with lockout-safe convergence.
 
-VPSGUARD_VERSION="0.3.5"
+VPSGUARD_VERSION="0.3.6"
 VPSGUARD_TEST_MODE="${VPSGUARD_TEST_MODE:-0}"
+VPSGUARD_PROC_ROOT="${VPSGUARD_PROC_ROOT:-/proc}"
+VPSGUARD_PROC_SYS_ROOT="${VPSGUARD_PROC_SYS_ROOT:-${VPSGUARD_PROC_ROOT}/sys}"
+VPSGUARD_SYS_MODULE_ROOT="${VPSGUARD_SYS_MODULE_ROOT:-/sys/module}"
 VPSGUARD_ETC_ROOT="${VPSGUARD_ETC_ROOT:-/etc}"
 VPSGUARD_RUN_ROOT="${VPSGUARD_RUN_ROOT:-/run}"
 VPSGUARD_LOG_FILE="${VPSGUARD_LOG_FILE:-/var/log/vpsguard.log}"
@@ -25,8 +28,15 @@ FAIL2BAN_JAIL="${FAIL2BAN_JAIL:-${VPSGUARD_ETC_ROOT}/fail2ban/jail.d/vpsguard-ss
 SUDOERS_DIR="${SUDOERS_DIR:-${VPSGUARD_ETC_ROOT}/sudoers.d}"
 BBR_SYSCTL_FILE="${BBR_SYSCTL_FILE:-${VPSGUARD_ETC_ROOT}/sysctl.d/99-vpsguard-bbr.conf}"
 BBR_MODULES_FILE="${BBR_MODULES_FILE:-${VPSGUARD_ETC_ROOT}/modules-load.d/vpsguard-bbr.conf}"
+CONNTRACK_SYSCTL_FILE="${CONNTRACK_SYSCTL_FILE:-${VPSGUARD_ETC_ROOT}/sysctl.d/99-vpsguard-conntrack.conf}"
+CONNTRACK_MODPROBE_FILE="${CONNTRACK_MODPROBE_FILE:-${VPSGUARD_ETC_ROOT}/modprobe.d/vpsguard-nf-conntrack.conf}"
+CONNTRACK_MODULES_FILE="${CONNTRACK_MODULES_FILE:-${VPSGUARD_ETC_ROOT}/modules-load.d/vpsguard-conntrack.conf}"
+CONNTRACK_HELPER_FILE="${CONNTRACK_HELPER_FILE:-${VPSGUARD_STATE_DIR}/apply-conntrack-profile.sh}"
+CONNTRACK_SERVICE_NAME="${CONNTRACK_SERVICE_NAME:-vpsguard-conntrack.service}"
+CONNTRACK_SERVICE_FILE="${CONNTRACK_SERVICE_FILE:-${SYSTEMD_SYSTEM_DIR}/${CONNTRACK_SERVICE_NAME}}"
 ROOT_AUTHORIZED_KEYS="${ROOT_AUTHORIZED_KEYS:-/root/.ssh/authorized_keys}"
 
+OPTIMIZE_CONNTRACK="false"
 REQUESTED_NEW_USER="${NEW_USER:-}"
 REQUESTED_SSH_PORT="${SSH_PORT:-}"
 NEW_USER=""
@@ -65,6 +75,11 @@ log_plain() {
 
 info() {
   printf '%b[INFO]%b %s\n' "$GREEN" "$NC" "$1"
+  log_plain INFO "$1"
+}
+
+ok() {
+  printf '%b[OK]%b %s\n' "$GREEN" "$NC" "$1"
   log_plain INFO "$1"
 }
 
@@ -119,6 +134,25 @@ assert_managed_or_absent() {
   if [ -e "$path" ] && ! head -n 1 "$path" | grep -Fq 'Managed by VPSGuard'; then
     error "Refusing to overwrite an unrecognized existing file: ${path}"
   fi
+}
+
+parse_args() {
+  local argument
+
+  for argument in "$@"; do
+    case "$argument" in
+      --optimize-conntrack)
+        OPTIMIZE_CONNTRACK="true"
+        ;;
+      -h|--help)
+        printf 'Usage: sudo bash install.sh [--optimize-conntrack]\n'
+        exit 0
+        ;;
+      *)
+        error "Unknown option: ${argument}"
+        ;;
+    esac
+  done
 }
 
 read_env_value() {
@@ -180,6 +214,8 @@ record_preinstall_state() {
   local ufw_installed ufw_active fail2ban_installed fail2ban_active fail2ban_enabled
   local sshd_dropin_preexisting sshd_include_preexisting ssh_socket_override_preexisting
   local fail2ban_jail_preexisting bbr_sysctl_preexisting bbr_modules_preexisting
+  local conntrack_sysctl_preexisting conntrack_modprobe_preexisting conntrack_modules_preexisting
+  local conntrack_helper_preexisting conntrack_service_preexisting
   local content
 
   if [ -f "$VPSGUARD_STATE_FILE" ]; then
@@ -207,6 +243,11 @@ record_preinstall_state() {
   fail2ban_jail_preexisting="$(boolean_command_state test -e "$FAIL2BAN_JAIL")"
   bbr_sysctl_preexisting="$(boolean_command_state test -e "$BBR_SYSCTL_FILE")"
   bbr_modules_preexisting="$(boolean_command_state test -e "$BBR_MODULES_FILE")"
+  conntrack_sysctl_preexisting="$(boolean_command_state test -e "$CONNTRACK_SYSCTL_FILE")"
+  conntrack_modprobe_preexisting="$(boolean_command_state test -e "$CONNTRACK_MODPROBE_FILE")"
+  conntrack_modules_preexisting="$(boolean_command_state test -e "$CONNTRACK_MODULES_FILE")"
+  conntrack_helper_preexisting="$(boolean_command_state test -e "$CONNTRACK_HELPER_FILE")"
+  conntrack_service_preexisting="$(boolean_command_state test -e "$CONNTRACK_SERVICE_FILE")"
 
   content="# VPSGuard pre-install state. Parsed as data; never sourced.
 UFW_INSTALLED='${ufw_installed}'
@@ -220,6 +261,11 @@ SSH_SOCKET_OVERRIDE_PREEXISTED='${ssh_socket_override_preexisting}'
 FAIL2BAN_JAIL_PREEXISTED='${fail2ban_jail_preexisting}'
 BBR_SYSCTL_PREEXISTED='${bbr_sysctl_preexisting}'
 BBR_MODULES_PREEXISTED='${bbr_modules_preexisting}'
+CONNTRACK_SYSCTL_PREEXISTED='${conntrack_sysctl_preexisting}'
+CONNTRACK_MODPROBE_PREEXISTED='${conntrack_modprobe_preexisting}'
+CONNTRACK_MODULES_PREEXISTED='${conntrack_modules_preexisting}'
+CONNTRACK_HELPER_PREEXISTED='${conntrack_helper_preexisting}'
+CONNTRACK_SERVICE_PREEXISTED='${conntrack_service_preexisting}'
 "
   atomic_write "$VPSGUARD_STATE_FILE" 600 "$content"
   atomic_write "$VPSGUARD_MANAGED_RULES" 600 "# UFW rules added by VPSGuard
@@ -1319,6 +1365,408 @@ enable_bbr() {
   esac
 }
 
+is_unsigned_integer() {
+  [[ "${1:-}" =~ ^[0-9]+$ ]]
+}
+
+read_first_line() {
+  local file="$1"
+
+  [ -r "$file" ] || return 1
+  awk 'NF {print; exit}' "$file"
+}
+
+conntrack_count_file() {
+  printf '%s/net/netfilter/nf_conntrack_count\n' "$VPSGUARD_PROC_SYS_ROOT"
+}
+
+conntrack_max_file() {
+  printf '%s/net/netfilter/nf_conntrack_max\n' "$VPSGUARD_PROC_SYS_ROOT"
+}
+
+conntrack_timeout_file() {
+  printf '%s/net/netfilter/nf_conntrack_tcp_timeout_%s\n' "$VPSGUARD_PROC_SYS_ROOT" "$1"
+}
+
+conntrack_hashsize_file() {
+  printf '%s/nf_conntrack/parameters/hashsize\n' "$VPSGUARD_SYS_MODULE_ROOT"
+}
+
+conntrack_profile_syn_sent_target() {
+  printf '30\n'
+}
+
+conntrack_profile_syn_recv_target() {
+  printf '20\n'
+}
+
+conntrack_profile_time_wait_target() {
+  printf '30\n'
+}
+
+conntrack_read_count() {
+  read_first_line "$(conntrack_count_file)"
+}
+
+conntrack_read_max() {
+  read_first_line "$(conntrack_max_file)"
+}
+
+conntrack_read_hashsize() {
+  read_first_line "$(conntrack_hashsize_file)"
+}
+
+conntrack_usage_percent() {
+  local count="$1"
+  local maximum="$2"
+
+  is_unsigned_integer "$count" || return 1
+  is_unsigned_integer "$maximum" || return 1
+  [ "$maximum" -gt 0 ] || return 1
+  awk -v count="$count" -v maximum="$maximum" 'BEGIN {printf "%.1f", (count / maximum) * 100}'
+}
+
+conntrack_usage_tenths() {
+  local count="$1"
+  local maximum="$2"
+
+  is_unsigned_integer "$count" || return 1
+  is_unsigned_integer "$maximum" || return 1
+  [ "$maximum" -gt 0 ] || return 1
+  awk -v count="$count" -v maximum="$maximum" 'BEGIN {printf "%d", (count * 1000) / maximum}'
+}
+
+conntrack_table_full_state() {
+  local logs="" command_output
+
+  if [ -n "${VPSGUARD_CONNTRACK_LOG_TEXT+x}" ]; then
+    logs="$VPSGUARD_CONNTRACK_LOG_TEXT"
+  else
+    if command -v dmesg >/dev/null 2>&1 && command_output="$(dmesg 2>/dev/null)"; then
+      logs="${logs}${command_output}
+"
+    fi
+    if command -v journalctl >/dev/null 2>&1 && command_output="$(journalctl -k -b --no-pager 2>/dev/null)"; then
+      logs="${logs}${command_output}
+"
+    fi
+  fi
+
+  if printf '%s\n' "$logs" | grep -Fq 'nf_conntrack: table full, dropping packet'; then
+    printf 'yes\n'
+  elif [ -n "$logs" ] || [ -n "${VPSGUARD_CONNTRACK_LOG_TEXT+x}" ]; then
+    printf 'no\n'
+  else
+    printf 'unknown\n'
+  fi
+}
+
+classify_conntrack_health() {
+  local count="$1"
+  local maximum="$2"
+  local table_full="$3"
+  local usage_tenths
+
+  [ "$table_full" = "yes" ] && { printf 'CRITICAL\n'; return 0; }
+  if ! usage_tenths="$(conntrack_usage_tenths "$count" "$maximum")"; then
+    printf 'UNAVAILABLE\n'
+    return 0
+  fi
+  if [ "$usage_tenths" -ge 900 ]; then
+    printf 'CRITICAL\n'
+  elif [ "$usage_tenths" -ge 750 ]; then
+    printf 'WARNING\n'
+  elif [ "$usage_tenths" -ge 500 ]; then
+    printf 'NOTICE\n'
+  else
+    printf 'OK\n'
+  fi
+}
+
+conntrack_status_fields() {
+  local count maximum hashsize usage table_full health
+
+  if ! count="$(conntrack_read_count 2>/dev/null)"; then count="unavailable"; fi
+  if ! maximum="$(conntrack_read_max 2>/dev/null)"; then maximum="unavailable"; fi
+  if ! hashsize="$(conntrack_read_hashsize 2>/dev/null)"; then hashsize="unavailable"; fi
+  if ! usage="$(conntrack_usage_percent "$count" "$maximum" 2>/dev/null)"; then usage="unavailable"; fi
+  table_full="$(conntrack_table_full_state)"
+  health="$(classify_conntrack_health "$count" "$maximum" "$table_full")"
+  printf '%s|%s|%s|%s|%s|%s\n' "$count" "$maximum" "$usage" "$hashsize" "$table_full" "$health"
+}
+
+print_conntrack_install_check() {
+  local fields count maximum usage hashsize table_full health
+
+  fields="$(conntrack_status_fields)"
+  IFS='|' read -r count maximum usage hashsize table_full health <<< "$fields"
+  case "$health" in
+    OK)
+      ok "Conntrack usage: ${usage}% (${count} / ${maximum}); hash buckets: ${hashsize}."
+      ;;
+    NOTICE|WARNING|CRITICAL)
+      warn "Conntrack health ${health}: ${usage}% (${count} / ${maximum}); table exhaustion evidence in accessible kernel logs: ${table_full}."
+      if [ "$table_full" = "yes" ]; then
+        warn "Conntrack table exhaustion was detected in accessible kernel logs; Linux has dropped packets before they reached applications."
+      fi
+      warn "No conntrack kernel parameter was changed. Run 'sudo bash install.sh --optimize-conntrack' only if you explicitly want VPSGuard to apply its conservative conntrack profile."
+      ;;
+    *)
+      warn "Conntrack health is unavailable on this kernel/container; continuing without changing conntrack settings."
+      ;;
+  esac
+}
+
+system_ram_mb() {
+  local meminfo="${VPSGUARD_PROC_ROOT}/meminfo"
+
+  [ -r "$meminfo" ] || { printf 'unknown\n'; return 0; }
+  awk '$1 == "MemTotal:" {printf "%d\n", $2 / 1024; found=1} END {if (!found) print "unknown"}' "$meminfo"
+}
+
+max_unsigned() {
+  local current="$1"
+  local floor="$2"
+
+  if is_unsigned_integer "$current" && [ "$current" -gt "$floor" ]; then
+    printf '%s\n' "$current"
+  else
+    printf '%s\n' "$floor"
+  fi
+}
+
+min_timeout_target() {
+  local current="$1"
+  local recommended="$2"
+
+  if is_unsigned_integer "$current" && [ "$current" -gt 0 ] && [ "$current" -lt "$recommended" ]; then
+    printf '%s\n' "$current"
+  else
+    printf '%s\n' "$recommended"
+  fi
+}
+
+conntrack_runtime_profile_state() {
+  local maximum hashsize syn_sent syn_recv time_wait
+
+  if ! maximum="$(conntrack_read_max 2>/dev/null)"; then
+    printf 'unavailable\n'
+    return 0
+  fi
+  if ! hashsize="$(conntrack_read_hashsize 2>/dev/null)"; then
+    printf 'unavailable\n'
+    return 0
+  fi
+  if ! syn_sent="$(read_first_line "$(conntrack_timeout_file syn_sent)" 2>/dev/null)"; then
+    printf 'unavailable\n'
+    return 0
+  fi
+  if ! syn_recv="$(read_first_line "$(conntrack_timeout_file syn_recv)" 2>/dev/null)"; then
+    printf 'unavailable\n'
+    return 0
+  fi
+  if ! time_wait="$(read_first_line "$(conntrack_timeout_file time_wait)" 2>/dev/null)"; then
+    printf 'unavailable\n'
+    return 0
+  fi
+
+  if ! is_unsigned_integer "$maximum" || [ "$maximum" -lt 65536 ]; then
+    printf 'drift detected\n'
+  elif ! is_unsigned_integer "$hashsize" || [ "$hashsize" -lt 16384 ]; then
+    printf 'drift detected\n'
+  elif [ "$syn_sent" != "$(conntrack_profile_syn_sent_target)" ]; then
+    printf 'drift detected\n'
+  elif [ "$syn_recv" != "$(conntrack_profile_syn_recv_target)" ]; then
+    printf 'drift detected\n'
+  elif [ "$time_wait" != "$(conntrack_profile_time_wait_target)" ]; then
+    printf 'drift detected\n'
+  else
+    printf 'active\n'
+  fi
+}
+
+foreign_conntrack_config_sources() {
+  local file first_line
+  local sources=""
+  local pattern='net.netfilter.nf_conntrack_|options[[:space:]]+nf_conntrack[[:space:]].*hashsize|nf_conntrack[[:space:]].*hashsize'
+
+  for file in "${VPSGUARD_ETC_ROOT}/sysctl.conf" "${VPSGUARD_ETC_ROOT}"/sysctl.d/*.conf "${VPSGUARD_ETC_ROOT}"/modprobe.d/*.conf; do
+    [ -f "$file" ] || continue
+    first_line="$(head -n 1 "$file" 2>/dev/null || printf '')"
+    case "$file" in
+      "$CONNTRACK_SYSCTL_FILE"|"$CONNTRACK_MODPROBE_FILE")
+        printf '%s\n' "$first_line" | grep -Fq 'Managed by VPSGuard' && continue
+        ;;
+    esac
+    if grep -Eq "$pattern" "$file"; then
+      sources="${sources}${file}
+"
+    fi
+  done
+  printf '%s' "$sources" | awk 'NF && !seen[$0]++'
+}
+
+write_conntrack_helper_file() {
+  local helper_content
+
+  assert_managed_or_absent "$CONNTRACK_HELPER_FILE"
+  helper_content="# Managed by VPSGuard ${VPSGUARD_VERSION}; optional conntrack runtime floor.
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROC_SYS_ROOT=\"\${VPSGUARD_PROC_SYS_ROOT:-/proc/sys}\"
+MAX_FILE=\"\${PROC_SYS_ROOT}/net/netfilter/nf_conntrack_max\"
+SYN_SENT_FILE=\"\${PROC_SYS_ROOT}/net/netfilter/nf_conntrack_tcp_timeout_syn_sent\"
+SYN_RECV_FILE=\"\${PROC_SYS_ROOT}/net/netfilter/nf_conntrack_tcp_timeout_syn_recv\"
+TIME_WAIT_FILE=\"\${PROC_SYS_ROOT}/net/netfilter/nf_conntrack_tcp_timeout_time_wait\"
+
+read_uint() {
+  local file=\"\$1\"
+  [ -r \"\$file\" ] || return 1
+  awk 'NF {print; exit}' \"\$file\" | grep -Eq '^[0-9]+$'
+  awk 'NF {print; exit}' \"\$file\"
+}
+
+write_value() {
+  local file=\"\$1\"
+  local value=\"\$2\"
+  [ -e \"\$file\" ] || return 0
+  printf '%s\n' \"\$value\" > \"\$file\" 2>/dev/null || true
+}
+
+if current_max=\"\$(read_uint \"\$MAX_FILE\" 2>/dev/null)\" && [ \"\$current_max\" -lt 65536 ]; then
+  write_value \"\$MAX_FILE\" 65536
+fi
+write_value \"\$SYN_SENT_FILE\" $(conntrack_profile_syn_sent_target)
+write_value \"\$SYN_RECV_FILE\" $(conntrack_profile_syn_recv_target)
+write_value \"\$TIME_WAIT_FILE\" $(conntrack_profile_time_wait_target)
+"
+  atomic_write "$CONNTRACK_HELPER_FILE" 755 "$helper_content"
+}
+
+write_conntrack_files() {
+  local target_hashsize="$1"
+  local sysctl_content modprobe_content modules_content service_content
+
+  assert_managed_or_absent "$CONNTRACK_SYSCTL_FILE"
+  assert_managed_or_absent "$CONNTRACK_MODPROBE_FILE"
+  assert_managed_or_absent "$CONNTRACK_MODULES_FILE"
+  assert_managed_or_absent "$CONNTRACK_SERVICE_FILE"
+  sysctl_content="# Managed by VPSGuard ${VPSGUARD_VERSION}; optional conntrack timeout profile.
+# nf_conntrack is loaded early through ${CONNTRACK_MODULES_FILE} so systemd-sysctl can see these keys.
+# Netfilter conntrack timeouts; these are not TCP socket TIME_WAIT settings.
+net.netfilter.nf_conntrack_tcp_timeout_syn_sent = $(conntrack_profile_syn_sent_target)
+net.netfilter.nf_conntrack_tcp_timeout_syn_recv = $(conntrack_profile_syn_recv_target)
+net.netfilter.nf_conntrack_tcp_timeout_time_wait = $(conntrack_profile_time_wait_target)
+"
+  modprobe_content="# Managed by VPSGuard ${VPSGUARD_VERSION}; applies when nf_conntrack is next loaded.
+options nf_conntrack hashsize=${target_hashsize}
+"
+  modules_content="# Managed by VPSGuard ${VPSGUARD_VERSION}; load conntrack before systemd-sysctl.
+nf_conntrack
+"
+  service_content="# Managed by VPSGuard ${VPSGUARD_VERSION}; optional conntrack runtime floor.
+[Unit]
+Description=Apply VPSGuard conntrack runtime profile
+Documentation=https://github.com/hcloudlab/vpsguard
+DefaultDependencies=no
+Wants=systemd-modules-load.service
+After=systemd-modules-load.service systemd-sysctl.service
+Before=network-pre.target ufw.service
+ConditionPathExists=/proc/sys/net/netfilter/nf_conntrack_max
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash ${CONNTRACK_HELPER_FILE}
+
+[Install]
+WantedBy=sysinit.target
+"
+  atomic_write "$CONNTRACK_SYSCTL_FILE" 644 "$sysctl_content"
+  atomic_write "$CONNTRACK_MODPROBE_FILE" 644 "$modprobe_content"
+  atomic_write "$CONNTRACK_MODULES_FILE" 644 "$modules_content"
+  write_conntrack_helper_file
+  atomic_write "$CONNTRACK_SERVICE_FILE" 644 "$service_content"
+}
+
+apply_conntrack_runtime_values() {
+  local target_hashsize="$1"
+
+  if [ "$VPSGUARD_TEST_MODE" = "1" ]; then
+    VPSGUARD_PROC_SYS_ROOT="$VPSGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE" || true
+    [ ! -e "$(conntrack_hashsize_file)" ] || printf '%s\n' "$target_hashsize" > "$(conntrack_hashsize_file)" 2>/dev/null || true
+    return 0
+  fi
+
+  if command -v modprobe >/dev/null 2>&1; then
+    if ! modprobe nf_conntrack >/dev/null 2>&1; then
+      warn "modprobe nf_conntrack failed; persistent module-load config was written for reboot."
+    fi
+  fi
+  if ! bash "$CONNTRACK_HELPER_FILE"; then
+    warn "Could not apply the conntrack runtime floor helper; persistent systemd unit was written for reboot."
+  fi
+  if ! sysctl -q -p "$CONNTRACK_SYSCTL_FILE" >/dev/null 2>&1; then
+    warn "Could not apply conntrack timeout sysctl values at runtime; persistent config was written for reboot."
+  fi
+  if [ -w "$(conntrack_hashsize_file)" ]; then
+    if printf '%s\n' "$target_hashsize" > "$(conntrack_hashsize_file)" 2>/dev/null; then
+      info "Updated nf_conntrack hashsize at runtime."
+    else
+      warn "Could not update nf_conntrack hashsize at runtime; reboot to apply ${CONNTRACK_MODPROBE_FILE}."
+    fi
+  else
+    warn "nf_conntrack hashsize cannot be changed at runtime here; reboot to apply ${CONNTRACK_MODPROBE_FILE}."
+  fi
+}
+
+enable_conntrack_service() {
+  if [ "$VPSGUARD_TEST_MODE" = "1" ]; then
+    return 0
+  fi
+  if ! command -v systemctl >/dev/null 2>&1; then
+    warn "systemctl is unavailable; conntrack runtime helper was written but cannot be enabled automatically."
+    return 0
+  fi
+  systemctl daemon-reload || warn "systemctl daemon-reload failed after writing ${CONNTRACK_SERVICE_FILE}."
+  systemctl enable "$CONNTRACK_SERVICE_NAME" >/dev/null 2>&1 \
+    || warn "Could not enable ${CONNTRACK_SERVICE_NAME}; run status.sh after reboot to check for conntrack profile drift."
+}
+
+optimize_conntrack() {
+  local current_hash
+  local target_hash
+  local foreign_sources foreign_count ram_mb
+
+  ensure_directory "$VPSGUARD_STATE_DIR" 700
+  record_preinstall_state
+
+  if ! current_hash="$(conntrack_read_hashsize 2>/dev/null)"; then current_hash=""; fi
+  ram_mb="$(system_ram_mb)"
+
+  foreign_sources="$(foreign_conntrack_config_sources)"
+  if [ -n "$foreign_sources" ]; then
+    foreign_count="$(printf '%s\n' "$foreign_sources" | awk 'NF {count++} END {print count + 0}')"
+    warn "Existing conntrack configuration detected outside VPSGuard:"
+    printf '%s\n' "$foreign_sources" | sed 's/^/  - /'
+    if [ "$foreign_count" -gt 1 ]; then
+      warn "Multiple conntrack configuration sources detected."
+    fi
+    warn "No VPSGuard conntrack file was written; user-owned kernel configuration was preserved."
+    return 0
+  fi
+
+  target_hash="$(max_unsigned "$current_hash" 16384)"
+
+  write_conntrack_files "$target_hash"
+  enable_conntrack_service
+  apply_conntrack_runtime_values "$target_hash"
+  info "Applied VPSGuard conntrack profile: max floor=65536, hashsize floor=${target_hash}, syn_sent=$(conntrack_profile_syn_sent_target), syn_recv=$(conntrack_profile_syn_recv_target), time_wait=$(conntrack_profile_time_wait_target), RAM=${ram_mb}MB."
+  warn "hashsize persistence depends on nf_conntrack reload/reboot; verify after reboot with status.sh."
+  print_conntrack_install_check
+}
+
 verify_authorized_keys() {
   local user_home ssh_directory authorized_keys owner ssh_mode key_mode
 
@@ -1412,8 +1860,13 @@ remove_legacy_phase_markers() {
 }
 
 main() {
+  parse_args "$@"
   require_root
   check_ubuntu_lts
+  if [ "$OPTIMIZE_CONNTRACK" = "true" ]; then
+    optimize_conntrack
+    return 0
+  fi
   ensure_directory "$VPSGUARD_STATE_DIR" 700
   prepare_sshd_runtime_directory
   resolve_managed_user
@@ -1441,6 +1894,7 @@ main() {
   configure_ssh_safely
   configure_fail2ban
   enable_bbr
+  print_conntrack_install_check
 
   run_final_acceptance || error "Final acceptance failed. The installed marker was not written; keep the current SSH session open."
   remove_legacy_phase_markers

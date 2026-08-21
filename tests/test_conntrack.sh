@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# shellcheck source=tests/test_helper.sh
+. "$(dirname "$0")/test_helper.sh"
+
+temporary_root="$(mktemp -d)"
+trap 'rm -rf "$temporary_root"' EXIT
+export VPSGUARD_TEST_MODE=1
+export VPSGUARD_PROC_ROOT="$temporary_root/proc"
+export VPSGUARD_PROC_SYS_ROOT="$temporary_root/proc/sys"
+export VPSGUARD_SYS_MODULE_ROOT="$temporary_root/sys/module"
+export VPSGUARD_ETC_ROOT="$temporary_root/etc"
+export VPSGUARD_STATE_DIR="$temporary_root/etc/vpsguard"
+export VPSGUARD_STATE_FILE="$VPSGUARD_STATE_DIR/state.env"
+export VPSGUARD_MANAGED_RULES="$VPSGUARD_STATE_DIR/managed-rules"
+export CONNTRACK_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-vpsguard-conntrack.conf"
+export CONNTRACK_MODPROBE_FILE="$temporary_root/etc/modprobe.d/vpsguard-nf-conntrack.conf"
+export CONNTRACK_MODULES_FILE="$temporary_root/etc/modules-load.d/vpsguard-conntrack.conf"
+export CONNTRACK_HELPER_FILE="$temporary_root/etc/vpsguard/apply-conntrack-profile.sh"
+export CONNTRACK_SERVICE_FILE="$temporary_root/etc/systemd/system/vpsguard-conntrack.service"
+export VPSGUARD_CONNTRACK_LOG_TEXT=""
+
+mkdir -p "$VPSGUARD_PROC_SYS_ROOT/net/netfilter" "$VPSGUARD_SYS_MODULE_ROOT/nf_conntrack/parameters" "$temporary_root/proc"
+printf '1024\n' > "$temporary_root/proc/meminfo"
+
+# shellcheck source=install.sh
+. "$TEST_ROOT/install.sh"
+
+write_conntrack_fixture() {
+  local count="$1"
+  local maximum="$2"
+  local hashsize="$3"
+
+  printf '%s\n' "$count" > "$(conntrack_count_file)"
+  printf '%s\n' "$maximum" > "$(conntrack_max_file)"
+  printf '%s\n' "$hashsize" > "$(conntrack_hashsize_file)"
+  printf '120\n' > "$(conntrack_timeout_file syn_sent)"
+  printf '60\n' > "$(conntrack_timeout_file syn_recv)"
+  printf '120\n' > "$(conntrack_timeout_file time_wait)"
+}
+
+write_conntrack_fixture 100 32768 8192
+assert_equal OK "$(classify_conntrack_health 100 32768 no)" "normal conntrack health"
+assert_equal '0.3' "$(conntrack_usage_percent 100 32768)" "normal usage percent"
+assert_equal NOTICE "$(classify_conntrack_health 19661 32768 no)" "notice conntrack health"
+assert_equal WARNING "$(classify_conntrack_health 26215 32768 no)" "warning conntrack health"
+assert_equal CRITICAL "$(classify_conntrack_health 29492 32768 no)" "critical conntrack health"
+VPSGUARD_CONNTRACK_LOG_TEXT='nf_conntrack: table full, dropping packet'
+assert_equal CRITICAL "$(classify_conntrack_health 100 65536 "$(conntrack_table_full_state)")" "table full overrides low usage"
+VPSGUARD_CONNTRACK_LOG_TEXT=""
+
+rm -f "$(conntrack_count_file)"
+fields="$(conntrack_status_fields)"
+IFS='|' read -r count _maximum _usage _hashsize _table_full health <<< "$fields"
+assert_equal unavailable "$count" "missing conntrack count is unavailable"
+assert_equal UNAVAILABLE "$health" "missing conntrack health is unavailable"
+
+write_conntrack_fixture 100 32768 8192
+optimize_conntrack >/dev/null
+assert_file_contains "$CONNTRACK_SYSCTL_FILE" 'net.netfilter.nf_conntrack_tcp_timeout_syn_sent = 30'
+assert_file_contains "$CONNTRACK_SYSCTL_FILE" 'net.netfilter.nf_conntrack_tcp_timeout_syn_recv = 20'
+assert_file_contains "$CONNTRACK_SYSCTL_FILE" 'net.netfilter.nf_conntrack_tcp_timeout_time_wait = 30'
+assert_file_contains "$CONNTRACK_SYSCTL_FILE" 'Netfilter conntrack timeouts; these are not TCP socket TIME_WAIT settings.'
+if grep -Fq 'nf_conntrack_max = 65536' "$CONNTRACK_SYSCTL_FILE"; then
+  fail "sysctl file still contains a static nf_conntrack_max floor"
+fi
+assert_file_contains "$CONNTRACK_MODPROBE_FILE" 'options nf_conntrack hashsize=16384'
+assert_file_contains "$CONNTRACK_MODULES_FILE" 'nf_conntrack'
+assert_file_contains "$CONNTRACK_SERVICE_FILE" 'After=systemd-modules-load.service systemd-sysctl.service'
+assert_file_contains "$CONNTRACK_SERVICE_FILE" 'Before=network-pre.target ufw.service'
+assert_file_contains "$CONNTRACK_SERVICE_FILE" 'Type=oneshot'
+assert_file_contains "$CONNTRACK_SERVICE_FILE" 'RemainAfterExit=yes'
+assert_file_contains "$CONNTRACK_SERVICE_FILE" 'WantedBy=sysinit.target'
+assert_file_contains "$CONNTRACK_SERVICE_FILE" 'ExecStart=/bin/bash'
+assert_file_contains "$CONNTRACK_HELPER_FILE" 'current_max'
+assert_equal 65536 "$(cat "$(conntrack_max_file)")" "runtime max floor raises low values"
+assert_equal 30 "$(cat "$(conntrack_timeout_file syn_sent)")" "runtime syn_sent timeout"
+assert_equal 20 "$(cat "$(conntrack_timeout_file syn_recv)")" "runtime syn_recv timeout"
+assert_equal 30 "$(cat "$(conntrack_timeout_file time_wait)")" "runtime time_wait timeout"
+assert_equal active "$(conntrack_runtime_profile_state)" "runtime profile active after optimization"
+first_checksum="$(cksum "$CONNTRACK_SYSCTL_FILE" "$CONNTRACK_MODPROBE_FILE" "$CONNTRACK_MODULES_FILE" "$CONNTRACK_HELPER_FILE" "$CONNTRACK_SERVICE_FILE")"
+optimize_conntrack >/dev/null
+assert_equal "$first_checksum" "$(cksum "$CONNTRACK_SYSCTL_FILE" "$CONNTRACK_MODPROBE_FILE" "$CONNTRACK_MODULES_FILE" "$CONNTRACK_HELPER_FILE" "$CONNTRACK_SERVICE_FILE")" "conntrack optimization is idempotent"
+
+write_conntrack_fixture 100 131072 32768
+rm -f "$CONNTRACK_SYSCTL_FILE" "$CONNTRACK_MODPROBE_FILE" "$CONNTRACK_MODULES_FILE" "$CONNTRACK_HELPER_FILE" "$CONNTRACK_SERVICE_FILE"
+optimize_conntrack >/dev/null
+assert_file_contains "$CONNTRACK_MODPROBE_FILE" 'options nf_conntrack hashsize=32768'
+assert_equal 131072 "$(cat "$(conntrack_max_file)")" "runtime max floor preserves high values"
+if grep -Fq 'hashsize=16384' "$CONNTRACK_MODPROBE_FILE"; then
+  fail "optimization lowered a high existing hashsize"
+fi
+
+printf '100\n' > "$(conntrack_count_file)"
+printf '65536\n' > "$(conntrack_max_file)"
+printf '16384\n' > "$(conntrack_hashsize_file)"
+printf '120\n' > "$(conntrack_timeout_file syn_sent)"
+printf '60\n' > "$(conntrack_timeout_file syn_recv)"
+printf '120\n' > "$(conntrack_timeout_file time_wait)"
+assert_equal 'drift detected' "$(conntrack_runtime_profile_state)" "timeout drift is detected"
+VPSGUARD_PROC_SYS_ROOT="$VPSGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE"
+assert_equal active "$(conntrack_runtime_profile_state)" "restart-equivalent helper apply fixes timeout drift"
+VPSGUARD_PROC_SYS_ROOT="$VPSGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE"
+assert_equal active "$(conntrack_runtime_profile_state)" "helper remains idempotent after restart-equivalent apply"
+
+printf '8192\n' > "$(conntrack_max_file)"
+VPSGUARD_PROC_SYS_ROOT="$VPSGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE"
+assert_equal 65536 "$(cat "$(conntrack_max_file)")" "helper raises 8192 max to floor"
+VPSGUARD_PROC_SYS_ROOT="$VPSGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE"
+assert_equal 65536 "$(cat "$(conntrack_max_file)")" "helper preserves 65536 max"
+printf '131072\n' > "$(conntrack_max_file)"
+VPSGUARD_PROC_SYS_ROOT="$VPSGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE"
+assert_equal 131072 "$(cat "$(conntrack_max_file)")" "helper preserves 131072 max"
+
+custom_sysctl="$temporary_root/etc/sysctl.d/custom.conf"
+mkdir -p "$(dirname "$custom_sysctl")"
+printf 'net.netfilter.nf_conntrack_max=131072\n' > "$custom_sysctl"
+rm -f "$CONNTRACK_SYSCTL_FILE" "$CONNTRACK_MODPROBE_FILE" "$CONNTRACK_MODULES_FILE" "$CONNTRACK_HELPER_FILE" "$CONNTRACK_SERVICE_FILE"
+optimize_conntrack >/dev/null
+[ ! -e "$CONNTRACK_SYSCTL_FILE" ] || fail "foreign sysctl config was overwritten by VPSGuard"
+[ ! -e "$CONNTRACK_MODPROBE_FILE" ] || fail "foreign modprobe config triggered a VPSGuard write"
+[ ! -e "$CONNTRACK_MODULES_FILE" ] || fail "foreign config triggered a VPSGuard modules-load write"
+[ ! -e "$CONNTRACK_SERVICE_FILE" ] || fail "foreign config triggered a VPSGuard systemd unit write"
+assert_file_contains "$custom_sysctl" 'net.netfilter.nf_conntrack_max=131072'
+
+pass "conntrack health, explicit optimization, custom-config protection and idempotency"

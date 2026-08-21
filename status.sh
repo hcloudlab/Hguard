@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VPSGUARD_VERSION="0.3.5"
+VPSGUARD_VERSION="0.3.6"
 VPSGUARD_TEST_MODE="${VPSGUARD_TEST_MODE:-0}"
+VPSGUARD_PROC_ROOT="${VPSGUARD_PROC_ROOT:-/proc}"
+VPSGUARD_PROC_SYS_ROOT="${VPSGUARD_PROC_SYS_ROOT:-${VPSGUARD_PROC_ROOT}/sys}"
+VPSGUARD_SYS_MODULE_ROOT="${VPSGUARD_SYS_MODULE_ROOT:-/sys/module}"
 VPSGUARD_ETC_ROOT="${VPSGUARD_ETC_ROOT:-/etc}"
 VPSGUARD_STATE_DIR="${VPSGUARD_STATE_DIR:-${VPSGUARD_ETC_ROOT}/vpsguard}"
 VPSGUARD_CONFIG_FILE="${VPSGUARD_CONFIG_FILE:-${VPSGUARD_STATE_DIR}/config.env}"
@@ -16,6 +19,12 @@ FAIL2BAN_JAIL="${FAIL2BAN_JAIL:-${VPSGUARD_ETC_ROOT}/fail2ban/jail.d/vpsguard-ss
 SUDOERS_DIR="${SUDOERS_DIR:-${VPSGUARD_ETC_ROOT}/sudoers.d}"
 BBR_SYSCTL_FILE="${BBR_SYSCTL_FILE:-${VPSGUARD_ETC_ROOT}/sysctl.d/99-vpsguard-bbr.conf}"
 BBR_MODULES_FILE="${BBR_MODULES_FILE:-${VPSGUARD_ETC_ROOT}/modules-load.d/vpsguard-bbr.conf}"
+CONNTRACK_SYSCTL_FILE="${CONNTRACK_SYSCTL_FILE:-${VPSGUARD_ETC_ROOT}/sysctl.d/99-vpsguard-conntrack.conf}"
+CONNTRACK_MODPROBE_FILE="${CONNTRACK_MODPROBE_FILE:-${VPSGUARD_ETC_ROOT}/modprobe.d/vpsguard-nf-conntrack.conf}"
+CONNTRACK_MODULES_FILE="${CONNTRACK_MODULES_FILE:-${VPSGUARD_ETC_ROOT}/modules-load.d/vpsguard-conntrack.conf}"
+CONNTRACK_HELPER_FILE="${CONNTRACK_HELPER_FILE:-${VPSGUARD_STATE_DIR}/apply-conntrack-profile.sh}"
+CONNTRACK_SERVICE_NAME="${CONNTRACK_SERVICE_NAME:-vpsguard-conntrack.service}"
+CONNTRACK_SERVICE_FILE="${CONNTRACK_SERVICE_FILE:-${SYSTEMD_SYSTEM_DIR}/${CONNTRACK_SERVICE_NAME}}"
 
 GREEN="\033[32m"
 YELLOW="\033[33m"
@@ -47,6 +56,214 @@ read_env_value() {
     \'*\') value="${value#\'}"; value="${value%\'}" ;;
   esac
   printf '%s\n' "$value"
+}
+
+is_unsigned_integer() {
+  [[ "${1:-}" =~ ^[0-9]+$ ]]
+}
+
+read_first_line() {
+  local file="$1"
+
+  [ -r "$file" ] || return 1
+  awk 'NF {print; exit}' "$file"
+}
+
+conntrack_count_file() {
+  printf '%s/net/netfilter/nf_conntrack_count\n' "$VPSGUARD_PROC_SYS_ROOT"
+}
+
+conntrack_max_file() {
+  printf '%s/net/netfilter/nf_conntrack_max\n' "$VPSGUARD_PROC_SYS_ROOT"
+}
+
+conntrack_hashsize_file() {
+  printf '%s/nf_conntrack/parameters/hashsize\n' "$VPSGUARD_SYS_MODULE_ROOT"
+}
+
+conntrack_timeout_file() {
+  printf '%s/net/netfilter/nf_conntrack_tcp_timeout_%s\n' "$VPSGUARD_PROC_SYS_ROOT" "$1"
+}
+
+conntrack_profile_syn_sent_target() {
+  printf '30\n'
+}
+
+conntrack_profile_syn_recv_target() {
+  printf '20\n'
+}
+
+conntrack_profile_time_wait_target() {
+  printf '30\n'
+}
+
+conntrack_read_count() {
+  read_first_line "$(conntrack_count_file)"
+}
+
+conntrack_read_max() {
+  read_first_line "$(conntrack_max_file)"
+}
+
+conntrack_read_hashsize() {
+  read_first_line "$(conntrack_hashsize_file)"
+}
+
+conntrack_usage_percent() {
+  local count="$1"
+  local maximum="$2"
+
+  is_unsigned_integer "$count" || return 1
+  is_unsigned_integer "$maximum" || return 1
+  [ "$maximum" -gt 0 ] || return 1
+  awk -v count="$count" -v maximum="$maximum" 'BEGIN {printf "%.1f", (count / maximum) * 100}'
+}
+
+conntrack_usage_tenths() {
+  local count="$1"
+  local maximum="$2"
+
+  is_unsigned_integer "$count" || return 1
+  is_unsigned_integer "$maximum" || return 1
+  [ "$maximum" -gt 0 ] || return 1
+  awk -v count="$count" -v maximum="$maximum" 'BEGIN {printf "%d", (count * 1000) / maximum}'
+}
+
+conntrack_table_full_state() {
+  local logs="" command_output
+
+  if [ -n "${VPSGUARD_CONNTRACK_LOG_TEXT+x}" ]; then
+    logs="$VPSGUARD_CONNTRACK_LOG_TEXT"
+  else
+    if command -v dmesg >/dev/null 2>&1 && command_output="$(dmesg 2>/dev/null)"; then
+      logs="${logs}${command_output}
+"
+    fi
+    if command -v journalctl >/dev/null 2>&1 && command_output="$(journalctl -k -b --no-pager 2>/dev/null)"; then
+      logs="${logs}${command_output}
+"
+    fi
+  fi
+
+  if printf '%s\n' "$logs" | grep -Fq 'nf_conntrack: table full, dropping packet'; then
+    printf 'yes\n'
+  elif [ -n "$logs" ] || [ -n "${VPSGUARD_CONNTRACK_LOG_TEXT+x}" ]; then
+    printf 'no\n'
+  else
+    printf 'unknown\n'
+  fi
+}
+
+classify_conntrack_health() {
+  local count="$1"
+  local maximum="$2"
+  local table_full="$3"
+  local usage_tenths
+
+  [ "$table_full" = "yes" ] && { printf 'CRITICAL\n'; return 0; }
+  if ! usage_tenths="$(conntrack_usage_tenths "$count" "$maximum")"; then
+    printf 'UNAVAILABLE\n'
+    return 0
+  fi
+  if [ "$usage_tenths" -ge 900 ]; then
+    printf 'CRITICAL\n'
+  elif [ "$usage_tenths" -ge 750 ]; then
+    printf 'WARNING\n'
+  elif [ "$usage_tenths" -ge 500 ]; then
+    printf 'NOTICE\n'
+  else
+    printf 'OK\n'
+  fi
+}
+
+conntrack_status_fields() {
+  local count maximum hashsize usage table_full health
+
+  if ! count="$(conntrack_read_count 2>/dev/null)"; then count="unavailable"; fi
+  if ! maximum="$(conntrack_read_max 2>/dev/null)"; then maximum="unavailable"; fi
+  if ! hashsize="$(conntrack_read_hashsize 2>/dev/null)"; then hashsize="unavailable"; fi
+  if ! usage="$(conntrack_usage_percent "$count" "$maximum" 2>/dev/null)"; then usage="unavailable"; fi
+  table_full="$(conntrack_table_full_state)"
+  health="$(classify_conntrack_health "$count" "$maximum" "$table_full")"
+  printf '%s|%s|%s|%s|%s|%s\n' "$count" "$maximum" "$usage" "$hashsize" "$table_full" "$health"
+}
+
+conntrack_runtime_profile_state() {
+  local maximum hashsize syn_sent syn_recv time_wait
+
+  if [ ! -f "$CONNTRACK_SYSCTL_FILE" ] \
+    && [ ! -f "$CONNTRACK_MODPROBE_FILE" ] \
+    && [ ! -f "$CONNTRACK_MODULES_FILE" ] \
+    && [ ! -f "$CONNTRACK_SERVICE_FILE" ] \
+    && [ ! -f "$CONNTRACK_HELPER_FILE" ]; then
+    printf 'not configured\n'
+    return 0
+  fi
+  if ! maximum="$(conntrack_read_max 2>/dev/null)"; then
+    printf 'unavailable\n'
+    return 0
+  fi
+  if ! hashsize="$(conntrack_read_hashsize 2>/dev/null)"; then
+    printf 'unavailable\n'
+    return 0
+  fi
+  if ! syn_sent="$(read_first_line "$(conntrack_timeout_file syn_sent)" 2>/dev/null)"; then
+    printf 'unavailable\n'
+    return 0
+  fi
+  if ! syn_recv="$(read_first_line "$(conntrack_timeout_file syn_recv)" 2>/dev/null)"; then
+    printf 'unavailable\n'
+    return 0
+  fi
+  if ! time_wait="$(read_first_line "$(conntrack_timeout_file time_wait)" 2>/dev/null)"; then
+    printf 'unavailable\n'
+    return 0
+  fi
+
+  if ! is_unsigned_integer "$maximum" || [ "$maximum" -lt 65536 ]; then
+    printf 'drift detected\n'
+  elif ! is_unsigned_integer "$hashsize" || [ "$hashsize" -lt 16384 ]; then
+    printf 'drift detected\n'
+  elif [ "$syn_sent" != "$(conntrack_profile_syn_sent_target)" ]; then
+    printf 'drift detected\n'
+  elif [ "$syn_recv" != "$(conntrack_profile_syn_recv_target)" ]; then
+    printf 'drift detected\n'
+  elif [ "$time_wait" != "$(conntrack_profile_time_wait_target)" ]; then
+    printf 'drift detected\n'
+  else
+    printf 'active\n'
+  fi
+}
+
+print_conntrack_status() {
+  local fields count maximum usage hashsize table_full health runtime_profile
+
+  fields="$(conntrack_status_fields)"
+  IFS='|' read -r count maximum usage hashsize table_full health <<< "$fields"
+  runtime_profile="$(conntrack_runtime_profile_state)"
+  section "Conntrack"
+  printf 'Usage: %s / %s (%s%%)\n' "$count" "$maximum" "$usage"
+  printf 'Hash buckets: %s\n' "$hashsize"
+  printf 'Table exhaustion found in accessible kernel logs: %s\n' "$table_full"
+  printf 'Health: %s\n' "$health"
+  printf 'Runtime profile: %s\n' "$runtime_profile"
+  printf 'Persistent sysctl config: %s\n' "$([ -f "$CONNTRACK_SYSCTL_FILE" ] && printf present || printf missing)"
+  printf 'modprobe hashsize config: %s\n' "$([ -f "$CONNTRACK_MODPROBE_FILE" ] && printf present || printf missing)"
+  printf 'modules-load config: %s\n' "$([ -f "$CONNTRACK_MODULES_FILE" ] && printf present || printf missing)"
+  printf 'runtime helper: %s\n' "$([ -f "$CONNTRACK_HELPER_FILE" ] && printf present || printf missing)"
+  printf 'systemd runtime unit: %s\n' "$([ -f "$CONNTRACK_SERVICE_FILE" ] && printf present || printf missing)"
+  if [ "$health" = "CRITICAL" ] && [ "$table_full" = "yes" ]; then
+    warn "CRITICAL: Linux has dropped packets because the conntrack table became full."
+    warn "New network connections may be dropped before reaching applications."
+  elif [ "$health" = "UNAVAILABLE" ]; then
+    warn "Conntrack is not active, not exposed, or not readable in this environment."
+  elif [ "$runtime_profile" = "drift detected" ]; then
+    if managed_file_is_owned "$CONNTRACK_SERVICE_FILE" && managed_file_is_owned "$CONNTRACK_HELPER_FILE"; then
+      warn "Runtime conntrack profile drift detected; run 'sudo systemctl restart ${CONNTRACK_SERVICE_NAME}' and verify with status.sh."
+    else
+      warn "Runtime conntrack profile drift detected; rerun 'sudo bash install.sh --optimize-conntrack' to redeploy the managed unit/helper."
+    fi
+  fi
 }
 
 ufw_rule_exists_from_text() {
@@ -369,6 +586,8 @@ main() {
   printf 'Default qdisc: %s\n' "${current_qdisc:-unknown}"
   printf 'Persistent sysctl config: %s\n' "$([ -f "$BBR_SYSCTL_FILE" ] && printf present || printf missing)"
   printf 'modules-load config: %s\n' "$([ -f "$BBR_MODULES_FILE" ] && printf present || printf missing)"
+
+  print_conntrack_status
 }
 
 if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
