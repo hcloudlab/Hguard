@@ -18,6 +18,7 @@ check_ubuntu_lts() { :; }
 resolve_managed_user() { :; }
 resolve_sudo_mode() { SUDO_MODE=password; }
 resolve_ssh_ports() { :; }
+check_root_ssh_key() { :; }
 write_config_env() { :; }
 record_preinstall_state() { :; }
 upgrade_system() { rm -rf "$VPSGUARD_RUN_ROOT/sshd"; }

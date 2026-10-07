@@ -1956,6 +1956,7 @@ main() {
   resolve_managed_user
   resolve_sudo_mode
   resolve_ssh_ports
+  check_root_ssh_key
   INSTALL_STATUS="failed"
   # Until the requested sudo transition is fully verified, keep the last
   # effective mode in persistent state so failed reruns report truthfully.
