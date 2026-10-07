@@ -120,10 +120,14 @@ mkdir -p "$(dirname "$SSHD_CONFIG")"
 printf 'Port 22\n' > "$SSHD_CONFIG"
 detect_ssh_runtime_mode() { SSH_RUNTIME_MODE="service"; SSH_SERVICE_UNIT="ssh.service"; }
 verify_effective_sshd_config() { return 0; }
+# Called below, before being redefined further down for the next scenario.
+# shellcheck disable=SC2329
 verify_ssh_listener() { return 0; }
 ufw_tcp_rule_exists() { return 0; }
 apply_runtime_count=0
-apply_ssh_runtime() { apply_runtime_count=$((apply_runtime_count + 1)); return 0; }
+listener_up="true"
+apply_ssh_runtime() { apply_runtime_count=$((apply_runtime_count + 1)); listener_up="true"; return 0; }
+verify_ssh_listener() { [ "$listener_up" = "true" ]; }
 
 SSH_PORT=2222
 ORIGINAL_SSH_PORT=2222
@@ -135,7 +139,13 @@ assert_equal 1 "$apply_runtime_count" "first run with new policy content applies
 configure_ssh_safely
 assert_equal 1 "$apply_runtime_count" "rerun with unchanged policy content does not reapply the SSH runtime"
 
-pass "configure_ssh_safely skips apply_ssh_runtime when the policy content is unchanged"
+# Policy content still unchanged, but the target port has stopped listening
+# (e.g. sshd crashed or was restarted externally) - must still reapply.
+listener_up="false"
+configure_ssh_safely
+assert_equal 2 "$apply_runtime_count" "unchanged policy content but target port not listening still reapplies the SSH runtime"
+
+pass "configure_ssh_safely reapplies when the SSH runtime is unhealthy, even if the policy content is unchanged"
 
 export VPSGUARD_PROC_ROOT="$temporary_root/proc"
 mkdir -p "$VPSGUARD_PROC_ROOT/net"

@@ -1333,7 +1333,7 @@ configure_ssh_safely() {
   write_vpsguard_ssh_runtime_policy "$keep_old_port"
   policy_changed="$ATOMIC_WRITE_CHANGED"
   verify_effective_sshd_config || error "Effective sshd configuration does not match the VPSGuard policy. SSH was not restarted."
-  if [ "$policy_changed" = "true" ]; then
+  if [ "$policy_changed" = "true" ] || ! verify_ssh_listener "$SSH_PORT"; then
     apply_ssh_runtime || error "Failed to apply SSH configuration safely. Keep the current root session open."
   fi
   verify_ssh_listener "$SSH_PORT" || error "Target SSH port ${SSH_PORT} is not listening through sshd/systemd. Old UFW access was preserved."
@@ -1364,7 +1364,7 @@ old=${ORIGINAL_SSH_PORT}
   write_vpsguard_ssh_runtime_policy false
   policy_changed="$ATOMIC_WRITE_CHANGED"
   verify_effective_sshd_config || error "Final SSH configuration validation failed; old UFW rule remains."
-  if [ "$policy_changed" = "true" ]; then
+  if [ "$policy_changed" = "true" ] || ! verify_ssh_listener "$SSH_PORT"; then
     apply_ssh_runtime || error "Could not finalize the SSH runtime; old UFW rule remains."
   fi
   verify_ssh_listener "$SSH_PORT" || error "Target SSH listener disappeared during finalization; old UFW rule remains."
@@ -1418,13 +1418,19 @@ bantime = 1h
   atomic_write "$FAIL2BAN_JAIL" 644 "$content"
   local jail_changed="$ATOMIC_WRITE_CHANGED"
   fail2ban-client -t >/dev/null 2>&1 || error "The fail2ban configuration test failed."
+
+  local needs_restart="false"
+  if [ "$jail_changed" = "true" ] || ! fail2ban-client status sshd >/dev/null 2>&1; then
+    needs_restart="true"
+  fi
   if command -v systemctl >/dev/null 2>&1; then
     systemctl enable fail2ban.service
-    if [ "$jail_changed" = "true" ]; then
+    systemctl is-active --quiet fail2ban.service || needs_restart="true"
+    if [ "$needs_restart" = "true" ]; then
       systemctl restart fail2ban.service
     fi
     systemctl is-active --quiet fail2ban.service || error "fail2ban did not become active."
-  elif [ "$jail_changed" = "true" ]; then
+  elif [ "$needs_restart" = "true" ]; then
     service fail2ban restart
   fi
   wait_for_fail2ban_sshd_jail || error "The fail2ban sshd jail did not become ready."
@@ -1525,7 +1531,7 @@ enable_bbr() {
   write_bbr_files
   local sysctl_changed="$ATOMIC_WRITE_CHANGED"
   migrate_legacy_bbr_file
-  if [ "$sysctl_changed" = "true" ]; then
+  if [ "$sysctl_changed" = "true" ] || [ "$current" != "bbr" ] || [ "$qdisc" != "fq" ]; then
     sysctl -p "$BBR_SYSCTL_FILE" >/dev/null 2>&1 || apply_failed="true"
   fi
   if ! current="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"; then current=""; fi
@@ -1948,6 +1954,9 @@ optimize_conntrack() {
   write_conntrack_files "$target_hash"
   local conntrack_files_changed="$ATOMIC_WRITE_CHANGED"
   enable_conntrack_service
+  if [ "$conntrack_files_changed" != "true" ] && [ "$(conntrack_runtime_profile_state)" != "active" ]; then
+    conntrack_files_changed="true"
+  fi
   apply_conntrack_runtime_values "$target_hash" "$conntrack_files_changed"
   info "Applied VPSGuard conntrack profile: max floor=65536, hashsize floor=${target_hash}, syn_sent=$(conntrack_profile_syn_sent_target), syn_recv=$(conntrack_profile_syn_recv_target), time_wait=$(conntrack_profile_time_wait_target), RAM=${ram_mb}MB."
   warn "hashsize persistence depends on nf_conntrack reload/reboot; verify after reboot with status.sh."

@@ -65,6 +65,8 @@ ORIGINAL_SSH_PORT=2222
 VPSGUARD_PENDING_PORT_MARKER="$temporary_root/.pending-port-finalization"
 rm -f "$VPSGUARD_PENDING_PORT_MARKER"
 restart_count=0
+# Called below, before being redefined further down for the next scenario.
+# shellcheck disable=SC2329
 systemctl() {
   case "$*" in
     'enable fail2ban.service') return 0 ;;
@@ -73,6 +75,7 @@ systemctl() {
     *) return 1 ;;
   esac
 }
+# shellcheck disable=SC2329
 fail2ban-client() {
   [ "$1" = "-t" ] && return 0
   [ "$*" = "status sshd" ] && return 0
@@ -86,3 +89,42 @@ configure_fail2ban
 assert_equal 1 "$restart_count" "rerun with unchanged jail content does not restart fail2ban"
 
 pass "configure_fail2ban skips the restart when the jail content is unchanged"
+
+# File unchanged, but the service has stopped (e.g. crashed or was manually
+# stopped) -> must still restart even though the jail content didn't change.
+restart_count=0
+service_active="false"
+# Called below, before being redefined further down for the next scenario.
+# shellcheck disable=SC2329
+systemctl() {
+  case "$*" in
+    'enable fail2ban.service') return 0 ;;
+    'restart fail2ban.service') restart_count=$((restart_count + 1)); service_active="true"; return 0 ;;
+    'is-active --quiet fail2ban.service') [ "$service_active" = "true" ] ;;
+    *) return 1 ;;
+  esac
+}
+configure_fail2ban
+assert_equal 1 "$restart_count" "unchanged jail content but inactive fail2ban.service still restarts"
+
+# File unchanged and the service reports active, but the sshd jail itself is
+# unavailable -> must still restart.
+restart_count=0
+service_active="true"
+sshd_jail_available="false"
+systemctl() {
+  case "$*" in
+    'enable fail2ban.service') return 0 ;;
+    'restart fail2ban.service') restart_count=$((restart_count + 1)); sshd_jail_available="true"; return 0 ;;
+    'is-active --quiet fail2ban.service') [ "$service_active" = "true" ] ;;
+    *) return 1 ;;
+  esac
+}
+fail2ban-client() {
+  [ "$1" = "-t" ] && return 0
+  [ "$*" = "status sshd" ] && [ "$sshd_jail_available" = "true" ]
+}
+configure_fail2ban
+assert_equal 1 "$restart_count" "unchanged jail content but unavailable sshd jail still restarts"
+
+pass "configure_fail2ban restarts when runtime state is wrong, even if the jail file is unchanged"

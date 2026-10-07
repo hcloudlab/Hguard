@@ -162,3 +162,22 @@ printf '# Managed by VPSGuard 0.3.6\n#!/usr/bin/env bash\nset -e\n' > "$old_form
 assert_success managed_file_is_owned "$old_format_file"
 
 pass "conntrack helper has the shebang first; the ownership marker is recognized on line 1 or 2"
+
+# optimize_conntrack itself (not the helper called directly) must still pass
+# files_changed=true to apply_conntrack_runtime_values when write_conntrack_files
+# reports no change but conntrack_runtime_profile_state is not "active" - e.g.
+# after a reboot that didn't pick up sysctl.d. Isolate this from the live
+# hashsize ratchet (which can make file content drift on its own across real
+# calls, confounding a black-box optimize_conntrack rerun) by stubbing both
+# collaborators directly - this is the last block in the file, so these stubs
+# never leak into an earlier test that needs the real functions.
+rm -f "$custom_sysctl"  # an earlier block's foreign file would make optimize_conntrack return early
+write_conntrack_files() { ATOMIC_WRITE_CHANGED="false"; }
+enable_conntrack_service() { :; }
+conntrack_runtime_profile_state() { printf 'drift detected\n'; }
+recorded_files_changed=""
+apply_conntrack_runtime_values() { recorded_files_changed="$2"; }
+optimize_conntrack >/dev/null
+assert_equal "true" "$recorded_files_changed" "unchanged files but non-active runtime state still forces files_changed=true"
+
+pass "optimize_conntrack forces a reapply when runtime state is wrong, even if its managed files are unchanged"

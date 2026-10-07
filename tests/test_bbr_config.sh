@@ -38,6 +38,8 @@ pass "BBR state classification and idempotent managed files"
 BBR_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-vpsguard-bbr-2.conf"
 BBR_MODULES_FILE="$temporary_root/etc/modules-load.d/vpsguard-bbr-2.conf"
 sysctl_p_count=0
+current_cc="cubic"
+current_qdisc="fq"
 sysctl() {
   if [ "$1" = "-p" ]; then
     sysctl_p_count=$((sysctl_p_count + 1))
@@ -45,8 +47,8 @@ sysctl() {
   fi
   if [ "$1" = "-n" ]; then
     case "$2" in
-      net.ipv4.tcp_congestion_control) printf 'cubic\n' ;;
-      net.core.default_qdisc) printf 'fq\n' ;;
+      net.ipv4.tcp_congestion_control) printf '%s\n' "$current_cc" ;;
+      net.core.default_qdisc) printf '%s\n' "$current_qdisc" ;;
     esac
     return 0
   fi
@@ -54,10 +56,22 @@ sysctl() {
 }
 available_congestion_controls() { printf 'reno cubic bbr\n'; }
 
+# Call 1: runtime not yet bbr+fq -> must apply.
+current_cc="cubic"; current_qdisc="fq"
 enable_bbr
 assert_equal 1 "$sysctl_p_count" "first run with new BBR sysctl content applies it"
 
+# Call 2: file unchanged AND runtime now genuinely reports bbr+fq (the
+# classify_bbr_state "already-enabled" early-return path) -> must not reapply.
+current_cc="bbr"; current_qdisc="fq"
 enable_bbr
-assert_equal 1 "$sysctl_p_count" "rerun with unchanged BBR sysctl content does not reapply it"
+assert_equal 1 "$sysctl_p_count" "rerun with unchanged content and correct runtime does not reapply it"
 
-pass "enable_bbr skips sysctl -p when the BBR sysctl content is unchanged"
+# Call 3: file still unchanged, but the kernel's live congestion control has
+# drifted back to non-bbr (e.g. reset externally) -> must reapply even though
+# the sysctl file content itself never changed.
+current_cc="cubic"; current_qdisc="fq"
+enable_bbr
+assert_equal 2 "$sysctl_p_count" "unchanged file but drifted runtime state still reapplies sysctl -p"
+
+pass "enable_bbr reapplies sysctl -p when runtime state drifts, skips it when both file and runtime are already correct"
