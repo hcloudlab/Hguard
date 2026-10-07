@@ -140,7 +140,7 @@ atomic_write() {
 
 assert_managed_or_absent() {
   local path="$1"
-  if [ -e "$path" ] && ! head -n 1 "$path" | grep -Fq 'Managed by VPSGuard'; then
+  if [ -e "$path" ] && ! head -n 2 "$path" | grep -Fq 'Managed by VPSGuard'; then
     error "Refusing to overwrite an unrecognized existing file: ${path}"
   fi
 }
@@ -686,7 +686,7 @@ legacy_sudoers_file_for_user() {
 
 managed_file_is_owned() {
   local file="$1"
-  [ -f "$file" ] && head -n 1 "$file" | grep -Eq '^# Managed by VPSGuard( |$)'
+  [ -f "$file" ] && head -n 2 "$file" | grep -Eq '^# Managed by VPSGuard( |$)'
 }
 
 user_in_sudo_group() {
@@ -1777,8 +1777,8 @@ write_conntrack_helper_file() {
   local helper_content
 
   assert_managed_or_absent "$CONNTRACK_HELPER_FILE"
-  helper_content="# Managed by VPSGuard ${VPSGUARD_VERSION}; optional conntrack runtime floor.
-#!/usr/bin/env bash
+  helper_content="#!/usr/bin/env bash
+# Managed by VPSGuard ${VPSGUARD_VERSION}; optional conntrack runtime floor.
 set -euo pipefail
 
 PROC_SYS_ROOT=\"\${VPSGUARD_PROC_SYS_ROOT:-/proc/sys}\"

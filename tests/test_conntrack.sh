@@ -144,3 +144,21 @@ apply_conntrack_runtime_values 16384 false
 assert_equal 1 "$(wc -l < "$helper_run_count_file" | tr -d ' ')" "files_changed=false skips the helper"
 
 pass "apply_conntrack_runtime_values skips the helper re-exec when nothing changed"
+
+rm -f "$CONNTRACK_HELPER_FILE"
+write_conntrack_helper_file
+first_line="$(head -n 1 "$CONNTRACK_HELPER_FILE")"
+second_line="$(sed -n '2p' "$CONNTRACK_HELPER_FILE")"
+assert_equal "#!/usr/bin/env bash" "$first_line" "conntrack helper has the shebang on line 1"
+case "$second_line" in
+  '# Managed by VPSGuard'*) ;;
+  *) fail "conntrack helper's ownership marker is not on line 2: ${second_line}" ;;
+esac
+assert_success managed_file_is_owned "$CONNTRACK_HELPER_FILE"
+
+# Old-format file (marker first, shebang second) must still be recognized.
+old_format_file="$temporary_root/old-format.sh"
+printf '# Managed by VPSGuard 0.3.6\n#!/usr/bin/env bash\nset -e\n' > "$old_format_file"
+assert_success managed_file_is_owned "$old_format_file"
+
+pass "conntrack helper has the shebang first; the ownership marker is recognized on line 1 or 2"
