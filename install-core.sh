@@ -589,11 +589,12 @@ resolve_ssh_ports() {
 
 upgrade_system() {
   info "Updating Ubuntu packages and installing VPSGuard dependencies..."
-  apt update
+  export NEEDRESTART_MODE=l
+  apt-get update
   if [ ! -s "$VPSGUARD_INSTALLED_MARKER" ]; then
-    DEBIAN_FRONTEND=noninteractive apt upgrade -y
+    DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y
   fi
-  DEBIAN_FRONTEND=noninteractive apt install -y sudo curl wget git vim nano unzip ufw fail2ban python3-systemd htop jq ca-certificates gnupg lsb-release net-tools iproute2 openssh-server
+  DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install -y sudo curl wget git vim nano unzip ufw fail2ban python3-systemd htop jq ca-certificates gnupg lsb-release net-tools iproute2 openssh-server
 }
 
 fail2ban_systemd_backend_available() {

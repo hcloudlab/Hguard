@@ -15,7 +15,7 @@ mkdir -p "$VPSGUARD_STATE_DIR"
 . "$TEST_ROOT/install-core.sh"
 
 apt_calls=""
-apt() { apt_calls="$apt_calls|$*"; }
+apt-get() { apt_calls="$apt_calls|$*"; }
 
 # First install: marker absent.
 rm -f "$VPSGUARD_INSTALLED_MARKER"

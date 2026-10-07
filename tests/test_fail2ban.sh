@@ -9,7 +9,7 @@ export VPSGUARD_TEST_MODE=1
 . "$TEST_ROOT/install.sh"
 
 apt_calls=()
-apt() {
+apt-get() {
   apt_calls+=("$*")
 }
 
