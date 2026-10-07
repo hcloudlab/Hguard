@@ -1256,6 +1256,10 @@ verify_ssh_listener() {
   printf '%s\n' "$output" | ssh_listener_present_from_text "$port"
 }
 
+interactive_terminal_available() {
+  [ -t 0 ]
+}
+
 configure_ssh_safely() {
   local keep_old_port="$PORT_MIGRATION_REQUIRED"
   local answer=""
@@ -1280,7 +1284,7 @@ old=${ORIGINAL_SSH_PORT}
   warn "New SSH port ${SSH_PORT} is listening locally. Old port ${ORIGINAL_SSH_PORT} remains listening and allowed until remote login is confirmed."
   printf '请在第二个终端测试：ssh -p %s %s@SERVER_IP\n' "$SSH_PORT" "$NEW_USER"
 
-  if [ -t 0 ]; then
+  if interactive_terminal_available; then
     read -r -p "确认第二终端登录和 sudo 正常后输入 YES；其他输入保留旧端口：" answer
   fi
   if [ "$answer" != "YES" ]; then
@@ -1292,6 +1296,11 @@ old=${ORIGINAL_SSH_PORT}
   verify_effective_sshd_config || error "Final SSH configuration validation failed; old UFW rule remains."
   apply_ssh_runtime || error "Could not finalize the SSH runtime; old UFW rule remains."
   verify_ssh_listener "$SSH_PORT" || error "Target SSH listener disappeared during finalization; old UFW rule remains."
+
+  if verify_ssh_listener "$ORIGINAL_SSH_PORT"; then
+    warn "Old SSH port ${ORIGINAL_SSH_PORT} is still being listened on after finalization. Check for another 'Port' directive in sshd_config or a drop-in outside VPSGuard's management."
+    INSTALL_STATUS="success-with-warnings"
+  fi
 
   if grep -Fxq "${ORIGINAL_SSH_PORT}/tcp" "$VPSGUARD_MANAGED_RULES" 2>/dev/null; then
     ufw --force delete allow "${ORIGINAL_SSH_PORT}/tcp"
@@ -1908,7 +1917,7 @@ run_final_acceptance() {
   [ "$failures" -eq 0 ] || return 1
   if [ "$INSTALL_STATUS" = "pending-port-finalization" ]; then
     :
-  elif [ "$warnings" -gt 0 ]; then
+  elif [ "$warnings" -gt 0 ] || [ "$INSTALL_STATUS" = "success-with-warnings" ]; then
     INSTALL_STATUS="success-with-warnings"
   else
     INSTALL_STATUS="success"

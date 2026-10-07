@@ -66,6 +66,8 @@ runtime_policy_calls=""
 write_vpsguard_ssh_runtime_policy() { runtime_policy_calls="${runtime_policy_calls}${1},"; }
 verify_effective_sshd_config() { return 0; }
 apply_ssh_runtime() { return 0; }
+# Called below, before being redefined further down for the next scenario.
+# shellcheck disable=SC2329
 verify_ssh_listener() { return 0; }
 ufw_tcp_rule_exists() { return 0; }
 
@@ -75,3 +77,31 @@ assert_equal 'false,' "$runtime_policy_calls" "finalized rerun writes target-onl
 [ ! -e "$VPSGUARD_PENDING_PORT_MARKER" ] || fail "finalized rerun recreated pending migration marker"
 
 pass "finalized reruns do not restore the old SSH port"
+
+# Simulate the old port still being listened on after finalization
+# (e.g. a second `Port` directive elsewhere in sshd_config).
+verify_ssh_listener() {
+  case "$1" in
+    "$SSH_PORT") return 0 ;;
+    "$ORIGINAL_SSH_PORT") return 0 ;;  # still up — this is the bug condition
+  esac
+  return 1
+}
+# The real code only prompts when interactive_terminal_available (a thin
+# wrapper around `[ -t 0 ]`) is true - stub it so this test is deterministic
+# regardless of whether this script happens to be run from a real terminal.
+# The real call is `read -r -p "prompt" answer`; the variable name to set is
+# always the last argument, available via bash's ${!#} indirect expansion.
+interactive_terminal_available() { return 0; }
+# Read via eval indirection below, not a direct reference.
+# shellcheck disable=SC2034
+answer_override="YES"
+read() { eval "${!#}=\$answer_override"; }
+
+PORT_MIGRATION_REQUIRED=true
+SSH_PORT=2222
+ORIGINAL_SSH_PORT=22
+configure_ssh_safely
+assert_equal "success-with-warnings" "$INSTALL_STATUS" "finalization warns when the old port is still listening"
+
+pass "configure_ssh_safely downgrades to success-with-warnings if the old port stays open"
