@@ -957,6 +957,29 @@ ensure_ufw_tcp_rule() {
   info "Added and recorded UFW rule ${port}/tcp."
 }
 
+survey_foreign_listening_ports() {
+  local output
+  output="${SS_LISTEN_ALL_OUTPUT_OVERRIDE:-$(ss -ltnupH 2>/dev/null; ss -lunupH 2>/dev/null)}"
+  printf '%s\n' "$output" | awk -v ssh_port="$SSH_PORT" '
+    {
+      proto = (tolower($1) == "udp") ? "udp" : "tcp"
+      addr = $5
+      n = split(addr, parts, ":")
+      port = parts[n]
+      host = substr(addr, 1, length(addr) - length(port) - 1)
+      if (host == "127.0.0.1" || host == "::1") next
+      if (port == ssh_port) next
+      process = "unknown"
+      if (match($0, /users:\(\("[^"]+"/)) {
+        process = substr($0, RSTART + 9, RLENGTH - 10)
+      }
+      key = port "/" proto
+      if (!(key in seen)) { seen[key] = process; order[++n2] = key }
+    }
+    END { for (i = 1; i <= n2; i++) print order[i] "\t" seen[order[i]] }
+  '
+}
+
 configure_ufw_before_ssh() {
   local active="false"
 
