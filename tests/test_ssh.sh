@@ -83,3 +83,33 @@ detect_ssh_runtime_mode
 assert_equal service "$SSH_RUNTIME_MODE" "service runtime detection without ssh.socket"
 
 pass "SSH effective configuration, first-include policy, socket listeners and old-port staging"
+
+NEW_USER="symlinkadmin"
+export ROOT_AUTHORIZED_KEYS="$temporary_root/root-authorized_keys"
+# check_root_ssh_key really parses this with ssh-keygen, so a fake-looking
+# string (e.g. "ssh-ed25519 AAAA root@host") fails for the wrong reason - it
+# must be a real key.
+ssh-keygen -q -t ed25519 -N '' -f "$temporary_root/root_test_key" </dev/null
+cp "$temporary_root/root_test_key.pub" "$ROOT_AUTHORIZED_KEYS"
+fake_user_home="$temporary_root/home/symlinkadmin"
+managed_user_home() { printf '%s\n' "$fake_user_home"; }
+
+mkdir -p "$fake_user_home"
+real_target="$(mktemp -d)"
+rm -rf "$fake_user_home/.ssh"
+ln -s "$real_target" "$fake_user_home/.ssh"
+# configure_authorized_keys calls error(), which exits the process on a
+# symlink rejection - run it in a subshell to check the exit status without
+# killing this whole test script.
+if (configure_authorized_keys) 2>/dev/null; then
+  fail "configure_authorized_keys should refuse a symlinked ~/.ssh"
+fi
+rm -f "$fake_user_home/.ssh"
+
+mkdir -p "$fake_user_home/.ssh"
+ln -s /dev/null "$fake_user_home/.ssh/authorized_keys"
+if (configure_authorized_keys) 2>/dev/null; then
+  fail "configure_authorized_keys should refuse a symlinked authorized_keys"
+fi
+
+pass "configure_authorized_keys refuses a symlinked ~/.ssh or authorized_keys"

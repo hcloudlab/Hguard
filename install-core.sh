@@ -625,6 +625,12 @@ configure_authorized_keys() {
   fi
   ssh_directory="${user_home}/.ssh"
   authorized_keys="${ssh_directory}/authorized_keys"
+  if [ -L "$ssh_directory" ]; then
+    error "${ssh_directory} is a symlink; refusing to follow it."
+  fi
+  if [ -L "$authorized_keys" ]; then
+    error "${authorized_keys} is a symlink; refusing to follow it."
+  fi
 
   ensure_directory "$ssh_directory" 700
   temporary_file="$(mktemp "${authorized_keys}.tmp.XXXXXX")"
