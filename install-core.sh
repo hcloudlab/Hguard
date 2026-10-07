@@ -1168,15 +1168,22 @@ ${existing_content}
 
 write_vpsguard_ssh_socket_override() {
   local keep_old_port="${1:-false}"
-  local listen_lines content
+  local listen_lines content ipv6_available="false"
 
   assert_managed_or_absent "$VPSGUARD_SSH_SOCKET_OVERRIDE"
-  listen_lines="ListenStream=0.0.0.0:${SSH_PORT}
+  [ -e "${VPSGUARD_PROC_ROOT}/net/if_inet6" ] && ipv6_available="true"
+  listen_lines="ListenStream=0.0.0.0:${SSH_PORT}"
+  if [ "$ipv6_available" = "true" ]; then
+    listen_lines="${listen_lines}
 ListenStream=[::]:${SSH_PORT}"
+  fi
   if [ "$keep_old_port" = "true" ] && [ "$ORIGINAL_SSH_PORT" != "$SSH_PORT" ]; then
     listen_lines="${listen_lines}
-ListenStream=0.0.0.0:${ORIGINAL_SSH_PORT}
+ListenStream=0.0.0.0:${ORIGINAL_SSH_PORT}"
+    if [ "$ipv6_available" = "true" ]; then
+      listen_lines="${listen_lines}
 ListenStream=[::]:${ORIGINAL_SSH_PORT}"
+    fi
   fi
   content="# Managed by VPSGuard ${VPSGUARD_VERSION}
 [Socket]

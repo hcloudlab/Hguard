@@ -136,3 +136,21 @@ configure_ssh_safely
 assert_equal 1 "$apply_runtime_count" "rerun with unchanged policy content does not reapply the SSH runtime"
 
 pass "configure_ssh_safely skips apply_ssh_runtime when the policy content is unchanged"
+
+export VPSGUARD_PROC_ROOT="$temporary_root/proc"
+mkdir -p "$VPSGUARD_PROC_ROOT/net"
+rm -f "$VPSGUARD_PROC_ROOT/net/if_inet6"  # IPv6 unavailable
+SSH_PORT=22
+VPSGUARD_SSH_SOCKET_OVERRIDE="$temporary_root/etc/systemd/system/ssh.socket.d/01-vpsguard.conf"
+write_vpsguard_ssh_socket_override false
+assert_file_contains "$VPSGUARD_SSH_SOCKET_OVERRIDE" "0.0.0.0:22"
+if grep -q '::' "$VPSGUARD_SSH_SOCKET_OVERRIDE"; then
+  fail "socket override must omit IPv6 ListenStream when /proc/net/if_inet6 is absent"
+fi
+
+: > "$VPSGUARD_PROC_ROOT/net/if_inet6"  # IPv6 available
+rm -f "$VPSGUARD_SSH_SOCKET_OVERRIDE"
+write_vpsguard_ssh_socket_override false
+assert_file_contains "$VPSGUARD_SSH_SOCKET_OVERRIDE" "[::]:22"
+
+pass "write_vpsguard_ssh_socket_override respects IPv6 availability"
