@@ -13,7 +13,7 @@ else
   SCRIPT_DIR=""
 fi
 LOCAL_CORE="${SCRIPT_DIR}/install-core.sh"
-CORE_URL="https://raw.githubusercontent.com/hcloudlab/vpsguard/7bad2718022b61139e1344c55a2e619608c530ac/install.sh"
+CORE_URL="https://raw.githubusercontent.com/hcloudlab/vpsguard/v${VPSGUARD_VERSION}/install-core.sh"
 TEMP_CORE=""
 
 cleanup() {

@@ -434,6 +434,18 @@ bash tests/run.sh
 
 GitHub Actions 在 Ubuntu 22.04 和 24.04 runner 上执行同样的静态与隔离测试，不进行真实远程 SSH 联调。
 
+### 发版步骤
+
+`install.sh` 是一个轻量 bootstrap：它从 `CORE_URL` 下载 `install-core.sh`（真正的实现），URL 中的标签由 `install.sh` 自己的 `VPSGUARD_VERSION` 决定。发版时：
+
+1. 修改 `VERSION` 文件，以及 `install.sh` 和 `install-core.sh` 中的 `VPSGUARD_VERSION` 字面量，改为新版本号；
+2. 更新 `CHANGELOG.md`；
+3. 提交；
+4. 打标签 `v<版本号>`（例如 `v0.3.7`）；
+5. `git push origin main --tags`。
+
+标签必须先在 GitHub 上存在，`install.sh` 的 `CORE_URL` 才能从中下载到对应版本的 `install-core.sh`——先打标签，再让用户重新执行一键安装命令。CI 会检查 `install.sh` 中 `CORE_URL` 的标签是否与 `VERSION` 文件一致。
+
 ## 版本与许可
 
 - 当前版本：`0.3.6`
