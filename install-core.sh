@@ -617,6 +617,15 @@ check_root_ssh_key() {
   ssh-keygen -l -f "$ROOT_AUTHORIZED_KEYS" >/dev/null 2>&1 || error "${ROOT_AUTHORIZED_KEYS} does not contain a public key that ssh-keygen can parse."
 }
 
+root_pubkey_sync_required() {
+  local user_home authorized_keys
+  [ -s "$VPSGUARD_INSTALLED_MARKER" ] || return 0
+  user_home="$(managed_user_home)"
+  authorized_keys="${user_home}/.ssh/authorized_keys"
+  [ -s "$authorized_keys" ] || return 0
+  return 1
+}
+
 configure_authorized_keys() {
   local user_home ssh_directory authorized_keys temporary_file
 
@@ -635,6 +644,14 @@ configure_authorized_keys() {
   fi
 
   ensure_directory "$ssh_directory" 700
+
+  if ! root_pubkey_sync_required; then
+    chmod 700 "$ssh_directory"
+    [ ! -f "$authorized_keys" ] || chmod 600 "$authorized_keys"
+    info "Administrator authorized_keys left untouched (not first install, existing keys present)."
+    return 0
+  fi
+
   temporary_file="$(mktemp "${authorized_keys}.tmp.XXXXXX")"
   if [ -f "$authorized_keys" ]; then
     awk 'NF && !seen[$0]++' "$authorized_keys" "$ROOT_AUTHORIZED_KEYS" > "$temporary_file"
