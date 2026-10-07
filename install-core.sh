@@ -957,6 +957,19 @@ ensure_ufw_tcp_rule() {
   info "Added and recorded UFW rule ${port}/tcp."
 }
 
+parse_allow_ports() {
+  local raw="$1" token port proto
+  IFS=',' read -ra __tokens <<<"$raw"
+  for token in "${__tokens[@]}"; do
+    [ -n "$token" ] || continue
+    port="${token%%/*}"
+    proto="${token##*/}"
+    case "$proto" in tcp|udp) ;; *) return 1 ;; esac
+    validate_ssh_port "$port" || return 1
+    printf '%s/%s\n' "$port" "$proto"
+  done
+}
+
 survey_foreign_listening_ports() {
   local output
   output="${SS_LISTEN_ALL_OUTPUT_OVERRIDE:-$(ss -ltnupH 2>/dev/null; ss -lunupH 2>/dev/null)}"

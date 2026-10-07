@@ -24,3 +24,12 @@ assert_equal "443/tcp	nginx
 8443/udp	myapp" "$result" "survey excludes ssh port and loopback-only listeners"
 
 pass "survey_foreign_listening_ports excludes SSH and loopback listeners"
+
+assert_equal "443/tcp
+8443/udp" "$(parse_allow_ports '443/tcp,8443/udp')" "parse_allow_ports normalizes a valid list"
+
+assert_failure parse_allow_ports '443/tcp,abc'
+assert_failure parse_allow_ports '70000/tcp'
+assert_failure parse_allow_ports '443/sctp'
+
+pass "parse_allow_ports validates port/proto tokens"
