@@ -125,3 +125,22 @@ optimize_conntrack >/dev/null
 assert_file_contains "$custom_sysctl" 'net.netfilter.nf_conntrack_max=131072'
 
 pass "conntrack health, explicit optimization, custom-config protection and idempotency"
+
+# apply_conntrack_runtime_values must skip the helper re-exec when the caller
+# reports nothing changed (write_conntrack_files's ATOMIC_WRITE_CHANGED result,
+# passed through as this function's 2nd argument).
+helper_run_count_file="$temporary_root/helper-run-count"
+: > "$helper_run_count_file"
+cat > "$CONNTRACK_HELPER_FILE" <<EOF
+#!/usr/bin/env bash
+printf 'x\n' >> "$helper_run_count_file"
+EOF
+chmod +x "$CONNTRACK_HELPER_FILE"
+
+apply_conntrack_runtime_values 16384 true
+assert_equal 1 "$(wc -l < "$helper_run_count_file" | tr -d ' ')" "files_changed=true runs the helper"
+
+apply_conntrack_runtime_values 16384 false
+assert_equal 1 "$(wc -l < "$helper_run_count_file" | tr -d ' ')" "files_changed=false skips the helper"
+
+pass "apply_conntrack_runtime_values skips the helper re-exec when nothing changed"

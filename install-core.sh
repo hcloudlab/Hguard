@@ -1408,12 +1408,15 @@ findtime = 10m
 bantime = 1h
 "
   atomic_write "$FAIL2BAN_JAIL" 644 "$content"
+  local jail_changed="$ATOMIC_WRITE_CHANGED"
   fail2ban-client -t >/dev/null 2>&1 || error "The fail2ban configuration test failed."
   if command -v systemctl >/dev/null 2>&1; then
     systemctl enable fail2ban.service
-    systemctl restart fail2ban.service
+    if [ "$jail_changed" = "true" ]; then
+      systemctl restart fail2ban.service
+    fi
     systemctl is-active --quiet fail2ban.service || error "fail2ban did not become active."
-  else
+  elif [ "$jail_changed" = "true" ]; then
     service fail2ban restart
   fi
   wait_for_fail2ban_sshd_jail || error "The fail2ban sshd jail did not become ready."
@@ -1442,12 +1445,14 @@ classify_bbr_state() {
 
 write_bbr_files() {
   local module_persistence="${BBR_MODULE_PERSISTENCE_REQUIRED:-auto}"
+  local sysctl_changed
 
   assert_managed_or_absent "$BBR_SYSCTL_FILE"
   atomic_write "$BBR_SYSCTL_FILE" 644 "# Managed by VPSGuard ${VPSGUARD_VERSION}
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 "
+  sysctl_changed="$ATOMIC_WRITE_CHANGED"
 
   if [ "$module_persistence" = "auto" ]; then
     if lsmod 2>/dev/null | awk '$1 == "tcp_bbr" {found=1} END {exit !found}'; then
@@ -1464,6 +1469,7 @@ tcp_bbr
   elif [ -f "$BBR_MODULES_FILE" ] && head -n 1 "$BBR_MODULES_FILE" | grep -Fq 'Managed by VPSGuard'; then
     rm -f "$BBR_MODULES_FILE"
   fi
+  ATOMIC_WRITE_CHANGED="$sysctl_changed"
 }
 
 migrate_legacy_bbr_file() {
@@ -1509,8 +1515,11 @@ enable_bbr() {
   fi
 
   write_bbr_files
+  local sysctl_changed="$ATOMIC_WRITE_CHANGED"
   migrate_legacy_bbr_file
-  sysctl -p "$BBR_SYSCTL_FILE" >/dev/null 2>&1 || apply_failed="true"
+  if [ "$sysctl_changed" = "true" ]; then
+    sysctl -p "$BBR_SYSCTL_FILE" >/dev/null 2>&1 || apply_failed="true"
+  fi
   if ! current="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"; then current=""; fi
   if ! qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null)"; then qdisc=""; fi
   BBR_STATUS="$(classify_bbr_state "$available" "$current" "$qdisc" "$apply_failed")"
@@ -1840,29 +1849,41 @@ ExecStart=/bin/bash ${CONNTRACK_HELPER_FILE}
 [Install]
 WantedBy=sysinit.target
 "
+  local any_changed="false"
   atomic_write "$CONNTRACK_SYSCTL_FILE" 644 "$sysctl_content"
+  [ "$ATOMIC_WRITE_CHANGED" = "true" ] && any_changed="true"
   atomic_write "$CONNTRACK_MODPROBE_FILE" 644 "$modprobe_content"
+  [ "$ATOMIC_WRITE_CHANGED" = "true" ] && any_changed="true"
   atomic_write "$CONNTRACK_MODULES_FILE" 644 "$modules_content"
+  [ "$ATOMIC_WRITE_CHANGED" = "true" ] && any_changed="true"
   write_conntrack_helper_file
+  [ "$ATOMIC_WRITE_CHANGED" = "true" ] && any_changed="true"
   atomic_write "$CONNTRACK_SERVICE_FILE" 644 "$service_content"
+  [ "$ATOMIC_WRITE_CHANGED" = "true" ] && any_changed="true"
+  ATOMIC_WRITE_CHANGED="$any_changed"
 }
 
 apply_conntrack_runtime_values() {
   local target_hashsize="$1"
+  local files_changed="${2:-true}"
 
   if [ "$VPSGUARD_TEST_MODE" = "1" ]; then
-    VPSGUARD_PROC_SYS_ROOT="$VPSGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE" || true
+    if [ "$files_changed" = "true" ]; then
+      VPSGUARD_PROC_SYS_ROOT="$VPSGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE" || true
+    fi
     [ ! -e "$(conntrack_hashsize_file)" ] || printf '%s\n' "$target_hashsize" > "$(conntrack_hashsize_file)" 2>/dev/null || true
     return 0
   fi
 
-  if command -v modprobe >/dev/null 2>&1; then
-    if ! modprobe nf_conntrack >/dev/null 2>&1; then
-      warn "modprobe nf_conntrack failed; persistent module-load config was written for reboot."
+  if [ "$files_changed" = "true" ]; then
+    if command -v modprobe >/dev/null 2>&1; then
+      if ! modprobe nf_conntrack >/dev/null 2>&1; then
+        warn "modprobe nf_conntrack failed; persistent module-load config was written for reboot."
+      fi
     fi
-  fi
-  if ! bash "$CONNTRACK_HELPER_FILE"; then
-    warn "Could not apply the conntrack runtime floor helper; persistent systemd unit was written for reboot."
+    if ! bash "$CONNTRACK_HELPER_FILE"; then
+      warn "Could not apply the conntrack runtime floor helper; persistent systemd unit was written for reboot."
+    fi
   fi
   if ! sysctl -q -p "$CONNTRACK_SYSCTL_FILE" >/dev/null 2>&1; then
     warn "Could not apply conntrack timeout sysctl values at runtime; persistent config was written for reboot."
@@ -1917,8 +1938,9 @@ optimize_conntrack() {
   target_hash="$(max_unsigned "$current_hash" 16384)"
 
   write_conntrack_files "$target_hash"
+  local conntrack_files_changed="$ATOMIC_WRITE_CHANGED"
   enable_conntrack_service
-  apply_conntrack_runtime_values "$target_hash"
+  apply_conntrack_runtime_values "$target_hash" "$conntrack_files_changed"
   info "Applied VPSGuard conntrack profile: max floor=65536, hashsize floor=${target_hash}, syn_sent=$(conntrack_profile_syn_sent_target), syn_recv=$(conntrack_profile_syn_recv_target), time_wait=$(conntrack_profile_time_wait_target), RAM=${ram_mb}MB."
   warn "hashsize persistence depends on nf_conntrack reload/reboot; verify after reboot with status.sh."
   print_conntrack_install_check

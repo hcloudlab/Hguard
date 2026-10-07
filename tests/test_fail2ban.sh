@@ -54,3 +54,35 @@ assert_failure wait_for_fail2ban_sshd_jail
 assert_equal 3 "$status_attempts" "bounded fail2ban readiness attempts"
 
 pass "explicit systemd backend dependency and bounded fail2ban readiness retries"
+
+# configure_fail2ban must only restart fail2ban when its jail config actually
+# changed - real atomic_write change-detection drives this, not a stub.
+temporary_root="$(mktemp -d)"
+trap 'rm -rf "$temporary_root"' EXIT
+FAIL2BAN_JAIL="$temporary_root/vpsguard-sshd.local"
+SSH_PORT=2222
+ORIGINAL_SSH_PORT=2222
+VPSGUARD_PENDING_PORT_MARKER="$temporary_root/.pending-port-finalization"
+rm -f "$VPSGUARD_PENDING_PORT_MARKER"
+restart_count=0
+systemctl() {
+  case "$*" in
+    'enable fail2ban.service') return 0 ;;
+    'restart fail2ban.service') restart_count=$((restart_count + 1)); return 0 ;;
+    'is-active --quiet fail2ban.service') return 0 ;;
+    *) return 1 ;;
+  esac
+}
+fail2ban-client() {
+  [ "$1" = "-t" ] && return 0
+  [ "$*" = "status sshd" ] && return 0
+  return 1
+}
+
+configure_fail2ban
+assert_equal 1 "$restart_count" "first run with new jail content restarts fail2ban"
+
+configure_fail2ban
+assert_equal 1 "$restart_count" "rerun with unchanged jail content does not restart fail2ban"
+
+pass "configure_fail2ban skips the restart when the jail content is unchanged"
