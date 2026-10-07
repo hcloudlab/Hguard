@@ -157,6 +157,23 @@ sudo -E env NEW_USER=myadmin SSH_PORT=2222 bash /tmp/vpsguard-install.sh
 
 这项门禁不能通过环境变量传入密码绕过，避免密码进入进程列表、Shell 历史或日志。
 
+## UFW 首次启用前的端口放行
+
+VPSGuard 在 UFW 尚未启用时，会先用 `ss` 检测是否有非 SSH 的 TCP/UDP 端口正在监听（例如 443 上的 nginx）。如果检测到这类端口：
+
+- 交互式安装会列出检测到的端口和进程名，让你选择要放行的端口（可留空，表示全部不放行）；
+- 非交互安装必须显式提供以下之一，否则会在修改系统前报错退出：
+  - `ALLOW_PORTS=443/tcp,8443/udp`（逗号分隔，每项为 `端口/tcp` 或 `端口/udp`）；
+  - `--ssh-only` 参数，表示明确只放行 SSH。
+
+```bash
+sudo -E env NEW_USER=myadmin ALLOW_PORTS=443/tcp,8443/udp bash /tmp/vpsguard-install.sh
+# 或
+sudo bash /tmp/vpsguard-install.sh --ssh-only
+```
+
+如果 UFW 已经处于启用状态（例如重跑），这项检测和放行逻辑不会触发。
+
 ## 重跑与更换管理用户
 
 统一配置保存在：

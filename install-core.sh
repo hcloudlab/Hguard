@@ -39,6 +39,8 @@ ROOT_AUTHORIZED_KEYS="${ROOT_AUTHORIZED_KEYS:-/root/.ssh/authorized_keys}"
 OPTIMIZE_CONNTRACK="false"
 REQUESTED_NEW_USER="${NEW_USER:-}"
 REQUESTED_SSH_PORT="${SSH_PORT:-}"
+REQUESTED_ALLOW_PORTS="${ALLOW_PORTS:-}"
+ALLOW_SSH_ONLY="false"
 NEW_USER=""
 PREVIOUS_MANAGED_USER=""
 SUDO_MODE=""
@@ -144,8 +146,11 @@ parse_args() {
       --optimize-conntrack)
         OPTIMIZE_CONNTRACK="true"
         ;;
+      --ssh-only)
+        ALLOW_SSH_ONLY="true"
+        ;;
       -h|--help)
-        printf 'Usage: sudo bash install.sh [--optimize-conntrack]\n'
+        printf 'Usage: sudo bash install.sh [--optimize-conntrack] [--ssh-only]\n'
         exit 0
         ;;
       *)
@@ -993,16 +998,59 @@ survey_foreign_listening_ports() {
   '
 }
 
+select_ports_from_survey() {
+  local survey="$1" selection="$2" chosen port proto
+  [ -n "$selection" ] || return 0
+  IFS=',' read -ra __chosen <<<"$selection"
+  for chosen in "${__chosen[@]}"; do
+    chosen="$(printf '%s' "$chosen" | tr -d '[:space:]')"
+    [ -n "$chosen" ] || continue
+    proto="$(printf '%s\n' "$survey" | awk -F'\t' -v p="$chosen" '$1 ~ ("^" p "/") {print $1; exit}')"
+    [ -n "$proto" ] || error "所选端口 ${chosen} 不在检测到的列表中。"
+    printf '%s\n' "$proto"
+  done
+}
+
 configure_ufw_before_ssh() {
   local active="false"
+  local foreign ports_to_allow="" line port proto
 
   if ufw_is_active; then
     active="true"
   fi
 
+  if [ "$active" != "true" ]; then
+    foreign="$(survey_foreign_listening_ports)"
+    if [ -n "$foreign" ]; then
+      if [ -n "$REQUESTED_ALLOW_PORTS" ]; then
+        ports_to_allow="$(parse_allow_ports "$REQUESTED_ALLOW_PORTS")" \
+          || error "ALLOW_PORTS format is invalid. Example: ALLOW_PORTS=443/tcp,8443/udp bash install.sh"
+      elif [ "$ALLOW_SSH_ONLY" = "true" ]; then
+        ports_to_allow=""
+      elif [ -t 0 ]; then
+        printf '检测到以下非 SSH 端口正在监听：\n'
+        printf '%s\n' "$foreign" | awk -F'\t' '{print "  - " $1 " (" $2 ")"}'
+        printf '输入要放行的端口号（逗号分隔，可留空表示全部不放行，例如 443,8443）：'
+        read -r selection
+        ports_to_allow="$(select_ports_from_survey "$foreign" "$selection")"
+      else
+        error "检测到非 SSH 端口正在监听，但未指定 ALLOW_PORTS 或 --ssh-only。示例：ALLOW_PORTS=443/tcp,8443/udp bash install.sh 或 bash install.sh --ssh-only"
+      fi
+    fi
+  fi
+
   ensure_ufw_tcp_rule "$SSH_PORT"
   if [ "$PORT_MIGRATION_REQUIRED" = "true" ]; then
     ensure_ufw_tcp_rule "$ORIGINAL_SSH_PORT"
+  fi
+  if [ -n "$ports_to_allow" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      port="${line%%/*}"
+      proto="${line##*/}"
+      ufw allow "${port}/${proto}"
+      record_managed_rule "${port}/${proto}"
+    done <<<"$ports_to_allow"
   fi
 
   if [ "$active" != "true" ]; then
