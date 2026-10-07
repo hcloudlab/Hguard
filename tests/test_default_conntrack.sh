@@ -22,9 +22,8 @@ export CALL_LOG="$temporary_root/calls.log"
   bash ./install.sh
 )
 mapfile -t calls < "$CALL_LOG"
-assert_equal 2 "${#calls[@]}" "default install invokes core twice"
-assert_equal '--optimize-conntrack' "${calls[0]}" "default install applies conntrack profile first"
-assert_equal '' "${calls[1]}" "default install then runs full hardening"
+assert_equal 1 "${#calls[@]}" "default install invokes core exactly once"
+assert_equal '' "${calls[0]}" "default install does not pass --optimize-conntrack to the bootstrap exec"
 
 : > "$CALL_LOG"
 (
@@ -44,4 +43,4 @@ mapfile -t calls < "$CALL_LOG"
 assert_equal 1 "${#calls[@]}" "help path invokes core once"
 assert_equal '--help' "${calls[0]}" "help does not modify conntrack first"
 
-pass "default install applies conntrack profile before full hardening"
+pass "default install invokes the core once; --optimize-conntrack and --help pass through unchanged"

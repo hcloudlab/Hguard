@@ -44,10 +44,13 @@ main
 assert_equal true "$runtime_directory_seen" "post-upgrade SSH runtime directory"
 runtime_directory_mode="$(stat -c '%a' "$VPSGUARD_RUN_ROOT/sshd" 2>/dev/null || stat -f '%Lp' "$VPSGUARD_RUN_ROOT/sshd")"
 assert_equal 755 "$runtime_directory_mode" "SSH runtime directory mode"
-[ ! -e "$CONNTRACK_SYSCTL_FILE" ] || fail "ordinary install wrote conntrack sysctl config"
-[ ! -e "$CONNTRACK_MODPROBE_FILE" ] || fail "ordinary install wrote conntrack modprobe config"
-[ ! -e "$CONNTRACK_MODULES_FILE" ] || fail "ordinary install wrote conntrack modules-load config"
-[ ! -e "$CONNTRACK_HELPER_FILE" ] || fail "ordinary install wrote conntrack helper"
-[ ! -e "$CONNTRACK_SERVICE_FILE" ] || fail "ordinary install wrote conntrack systemd unit"
+# The default install flow now applies the conntrack profile unconditionally
+# (after enable_bbr, inside main() itself - see optimize_conntrack's call site),
+# not only via a separate --optimize-conntrack invocation.
+[ -e "$CONNTRACK_SYSCTL_FILE" ] || fail "ordinary install did not write conntrack sysctl config"
+[ -e "$CONNTRACK_MODPROBE_FILE" ] || fail "ordinary install did not write conntrack modprobe config"
+[ -e "$CONNTRACK_MODULES_FILE" ] || fail "ordinary install did not write conntrack modules-load config"
+[ -e "$CONNTRACK_HELPER_FILE" ] || fail "ordinary install did not write conntrack helper"
+[ -e "$CONNTRACK_SERVICE_FILE" ] || fail "ordinary install did not write conntrack systemd unit"
 
 pass "OpenSSH upgrade runtime-directory recreation"

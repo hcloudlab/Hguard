@@ -1979,6 +1979,7 @@ main() {
   configure_ssh_safely
   configure_fail2ban
   enable_bbr
+  optimize_conntrack
   print_conntrack_install_check
 
   run_final_acceptance || error "Final acceptance failed. The installed marker was not written; keep the current SSH session open."

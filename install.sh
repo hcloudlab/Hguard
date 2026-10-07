@@ -53,15 +53,7 @@ if [ "${VPSGUARD_TEST_MODE:-0}" = "1" ]; then
 fi
 
 # Preserve the existing standalone/help interfaces exactly. Unknown argument
-# combinations are delegated to the core so its validation remains the single
-# source of truth.
-if [ "$#" -gt 0 ]; then
-  exec bash "$CORE_SCRIPT" "$@"
-fi
-
-# Normal VPSGuard installation now includes the conntrack capacity fix by
-# default. The core keeps the safety properties already validated in v0.3.6:
-# user-owned conntrack configuration is preserved, existing higher max/hashsize
-# values are never lowered, and no reboot/module unload is forced.
-bash "$CORE_SCRIPT" --optimize-conntrack
-exec bash "$CORE_SCRIPT"
+# combinations, and the default no-args install, are delegated to the core so
+# its validation remains the single source of truth. The core applies the
+# conntrack profile itself, after BBR, inside its own default flow.
+exec bash "$CORE_SCRIPT" "$@"
