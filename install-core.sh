@@ -799,8 +799,23 @@ ${NEW_USER} ALL=(ALL:ALL) NOPASSWD: ALL
   return 1
 }
 
+detect_foreign_nopasswd_sudoers() {
+  local file
+  [ -d "$SUDOERS_DIR" ] || return 1
+  for file in "$SUDOERS_DIR"/*; do
+    [ -f "$file" ] || continue
+    managed_file_is_owned "$file" && continue
+    if grep -Eq "^[[:space:]]*${NEW_USER}[[:space:]]+ALL=\(ALL(:ALL)?\)[[:space:]]+NOPASSWD:" "$file"; then
+      printf '%s\n' "$file"
+      return 0
+    fi
+  done
+  return 1
+}
+
 configure_password_sudo() {
   local sudoers_file legacy_file backup="" legacy_backup=""
+  local foreign_nopasswd
 
   sudoers_file="$(sudoers_file_for_user)"
   legacy_file="$(legacy_sudoers_file_for_user)"
@@ -810,6 +825,10 @@ configure_password_sudo() {
   fi
   if [ -e "$legacy_file" ] && ! managed_file_is_owned "$legacy_file"; then
     warn "Refusing to remove an unrecognized legacy sudoers file: ${legacy_file}"
+    return 1
+  fi
+  if foreign_nopasswd="$(detect_foreign_nopasswd_sudoers)"; then
+    warn "检测到 ${foreign_nopasswd} 已授予 ${NEW_USER} 免密码 sudo（通常来自 cloud-init），与 password 模式冲突。请手动检查该文件并决定是否删除或修改后重试；VPSGuard 不会自动修改它。"
     return 1
   fi
 

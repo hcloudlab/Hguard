@@ -267,3 +267,26 @@ if grep -Eq 'passwd[[:space:]]+(-d|--delete)|passwd[[:space:]]+(-e|--expire)' "$
 fi
 
 pass "selectable sudo modes, risk gate, behavior checks, migrations, rollback and idempotency"
+
+NEW_USER="cloudinituser"
+mkdir -p "$SUDOERS_DIR"
+cat > "$SUDOERS_DIR/90-cloud-init-users" <<EOF
+${NEW_USER} ALL=(ALL) NOPASSWD:ALL
+EOF
+
+found="$(detect_foreign_nopasswd_sudoers)"
+assert_equal "$SUDOERS_DIR/90-cloud-init-users" "$found" "detects the cloud-init NOPASSWD file for the managed user"
+
+rm -f "$SUDOERS_DIR/90-cloud-init-users"
+assert_failure detect_foreign_nopasswd_sudoers
+
+pass "detect_foreign_nopasswd_sudoers finds unmanaged NOPASSWD grants for the managed user"
+
+cat > "$SUDOERS_DIR/90-cloud-init-users" <<EOF
+${NEW_USER} ALL=(ALL) NOPASSWD:ALL
+EOF
+SUDO_MODE="password"
+assert_failure configure_password_sudo
+assert_file_contains "$SUDOERS_DIR/90-cloud-init-users" "NOPASSWD"  # untouched
+
+pass "configure_password_sudo refuses to proceed with a foreign cloud-init NOPASSWD file present"
