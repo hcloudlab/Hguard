@@ -583,7 +583,9 @@ resolve_ssh_ports() {
 upgrade_system() {
   info "Updating Ubuntu packages and installing VPSGuard dependencies..."
   apt update
-  DEBIAN_FRONTEND=noninteractive apt upgrade -y
+  if [ ! -s "$VPSGUARD_INSTALLED_MARKER" ]; then
+    DEBIAN_FRONTEND=noninteractive apt upgrade -y
+  fi
   DEBIAN_FRONTEND=noninteractive apt install -y sudo curl wget git vim nano unzip ufw fail2ban python3-systemd htop jq ca-certificates gnupg lsb-release net-tools iproute2 openssh-server
 }
 
