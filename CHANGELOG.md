@@ -2,6 +2,25 @@
 
 All notable changes to VPSGuard are documented here.
 
+## [0.3.7] - 2026-10-07
+
+### Fixed
+
+- Never enable UFW before allowing existing non-SSH listeners; add `ALLOW_PORTS` and `--ssh-only` for non-interactive installs.
+- Validate root's SSH key before touching the system, not partway through `configure_authorized_keys`.
+- Apply the conntrack profile once, after BBR, inside the normal install flow, instead of as a separate pre-invocation.
+- Pin `CORE_URL` to a version tag (`v<VERSION>`) instead of a commit SHA, and verify in CI that the tag matches `VERSION`.
+- Warn and downgrade the install status to `success-with-warnings` if the old SSH port stays open after migration finalization.
+- Refuse password-sudo mode when a foreign cloud-init NOPASSWD sudoers file exists for the managed user.
+- Refuse a symlinked `~/.ssh` directory or `authorized_keys` file.
+- Only run a full `apt-get upgrade` on first install, not on reruns.
+- Only sync root's pubkey to the admin on first install or when the admin's `authorized_keys` is empty.
+- Only reload or restart managed services (sshd/ssh.socket, fail2ban, BBR sysctl, conntrack) when their configuration actually changed; fixes a trailing-newline bug in `atomic_write`'s own change-detection that previously made every multi-line managed file register as "changed" on every run.
+- Use `apt-get` (not the deprecated `apt` command) with conservative dpkg options (`--force-confdef`, `--force-confold`) and `NEEDRESTART_MODE=l` for unattended upgrades.
+- Report the server IP from `hostname -I` only; remove the external `api.ipify.org` network call from the install summary.
+- Put the shebang first in the conntrack runtime helper script; the ownership marker is now recognized on line 1 or line 2 for compatibility with both old and new files.
+- Omit the IPv6 `ListenStream` line from the `ssh.socket` override when IPv6 is unavailable (`/proc/net/if_inet6` absent).
+
 ## [0.3.6] - 2026-08-21
 
 ### Added

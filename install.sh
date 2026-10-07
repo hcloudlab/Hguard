@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# VPSGuard v0.3.6
+# VPSGuard v0.3.7
 # Default entrypoint. A normal install applies the validated conntrack profile
 # before continuing with the existing SSH/UFW/fail2ban/BBR hardening flow.
 
 # shellcheck disable=SC2034
-VPSGUARD_VERSION="0.3.6"
+VPSGUARD_VERSION="0.3.7"
 if SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"; then
   :
 else

@@ -1,4 +1,4 @@
-# VPSGuard v0.3.6
+# VPSGuard v0.3.7
 
 VPSGuard 是面向 Ubuntu LTS 新 VPS 的 Bash 初始化与 SSH 安全加固工具。它创建或复用一个由用户明确指定的管理员账户，配置 SSH 公钥、sudo、UFW、fail2ban，并在内核支持时启用 Linux 原生 BBR。
 
@@ -448,7 +448,7 @@ GitHub Actions 在 Ubuntu 22.04 和 24.04 runner 上执行同样的静态与隔�
 
 ## 版本与许可
 
-- 当前版本：`0.3.6`
+- 当前版本：`0.3.7`
 - 更新记录：[CHANGELOG.md](CHANGELOG.md)
 - 许可：[MIT](LICENSE)
 - 仓库：[github.com/hcloudlab/vpsguard](https://github.com/hcloudlab/vpsguard)
