@@ -2019,7 +2019,7 @@ run_final_acceptance() {
 
 print_final_summary() {
   local server_ip
-  server_ip="$(curl -4 --max-time 3 -fsS https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')"
+  server_ip="$(hostname -I | awk '{print $1}')"
 
   printf '\n%bVPSGuard %s acceptance completed%b\n' "$BOLD" "$VPSGUARD_VERSION" "$NC"
   printf 'Install status: %s\n' "$INSTALL_STATUS"

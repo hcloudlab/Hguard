@@ -40,3 +40,19 @@ record_managed_rule '22/tcp'
 assert_equal 1 "$(grep -c '^22/tcp$' "$VPSGUARD_MANAGED_RULES")" "managed rule uniqueness"
 
 pass "pre-install state is immutable and managed rules are unique"
+
+# print_final_summary must report the server IP from `hostname -I` only, with
+# no external network call.
+curl() { fail "print_final_summary must not call curl/network for the server IP"; }
+hostname() { [ "$1" = "-I" ] && printf '203.0.113.5 fe80::1\n'; }
+NEW_USER="admin"
+SUDO_MODE="passwordless"
+SSH_PORT=22
+ORIGINAL_SSH_PORT=22
+SSH_RUNTIME_MODE="socket"
+BBR_STATUS="enabled"
+INSTALL_STATUS="success"
+summary_output="$(print_final_summary)"
+assert_file_contains /dev/stdin "203.0.113.5" <<<"$summary_output"
+
+pass "print_final_summary reports the server IP from hostname -I only, no network call"
