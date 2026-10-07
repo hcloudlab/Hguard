@@ -48,6 +48,7 @@ PREVIOUS_SUDO_MODE=""
 SSH_PORT=""
 ORIGINAL_SSH_PORT=""
 PORT_MIGRATION_REQUIRED="false"
+ATOMIC_WRITE_CHANGED="false"
 INSTALL_STATUS="failed"
 BBR_STATUS="unsupported"
 SSH_RUNTIME_MODE="unknown"
@@ -114,6 +115,11 @@ atomic_write() {
   local directory
   local temporary_file
 
+  ATOMIC_WRITE_CHANGED="false"
+  if [ -f "$path" ] && [ "$(cat "$path" 2>/dev/null)" = "$(printf '%s' "$content")" ]; then
+    return 0
+  fi
+
   directory="$(dirname "$path")"
   if [ ! -d "$directory" ]; then
     mkdir -p "$directory"
@@ -129,6 +135,7 @@ atomic_write() {
     chown root:root "$temporary_file"
   fi
   mv -f "$temporary_file" "$path"
+  ATOMIC_WRITE_CHANGED="true"
 }
 
 assert_managed_or_absent() {
@@ -1180,15 +1187,21 @@ ${listen_lines}
 
 write_vpsguard_ssh_runtime_policy() {
   local keep_old_port="${1:-false}"
+  local any_changed="false"
 
   write_vpsguard_sshd_config "$keep_old_port"
+  [ "$ATOMIC_WRITE_CHANGED" = "true" ] && any_changed="true"
   ensure_vpsguard_sshd_include_first
+  [ "$ATOMIC_WRITE_CHANGED" = "true" ] && any_changed="true"
   detect_ssh_runtime_mode
   if [ "$SSH_RUNTIME_MODE" = "socket" ]; then
     write_vpsguard_ssh_socket_override "$keep_old_port"
+    [ "$ATOMIC_WRITE_CHANGED" = "true" ] && any_changed="true"
   elif [ -f "$VPSGUARD_SSH_SOCKET_OVERRIDE" ] && head -n 1 "$VPSGUARD_SSH_SOCKET_OVERRIDE" | grep -Fq 'Managed by VPSGuard'; then
     rm -f "$VPSGUARD_SSH_SOCKET_OVERRIDE"
+    any_changed="true"
   fi
+  ATOMIC_WRITE_CHANGED="$any_changed"
 }
 
 effective_sshd_value_from_text() {
@@ -1307,10 +1320,14 @@ interactive_terminal_available() {
 configure_ssh_safely() {
   local keep_old_port="$PORT_MIGRATION_REQUIRED"
   local answer=""
+  local policy_changed
 
   write_vpsguard_ssh_runtime_policy "$keep_old_port"
+  policy_changed="$ATOMIC_WRITE_CHANGED"
   verify_effective_sshd_config || error "Effective sshd configuration does not match the VPSGuard policy. SSH was not restarted."
-  apply_ssh_runtime || error "Failed to apply SSH configuration safely. Keep the current root session open."
+  if [ "$policy_changed" = "true" ]; then
+    apply_ssh_runtime || error "Failed to apply SSH configuration safely. Keep the current root session open."
+  fi
   verify_ssh_listener "$SSH_PORT" || error "Target SSH port ${SSH_PORT} is not listening through sshd/systemd. Old UFW access was preserved."
   if [ "$keep_old_port" = "true" ]; then
     verify_ssh_listener "$ORIGINAL_SSH_PORT" || error "Old SSH port ${ORIGINAL_SSH_PORT} was not preserved during staging. Keep the current session open and inspect SSH manually."
@@ -1337,8 +1354,11 @@ old=${ORIGINAL_SSH_PORT}
   fi
 
   write_vpsguard_ssh_runtime_policy false
+  policy_changed="$ATOMIC_WRITE_CHANGED"
   verify_effective_sshd_config || error "Final SSH configuration validation failed; old UFW rule remains."
-  apply_ssh_runtime || error "Could not finalize the SSH runtime; old UFW rule remains."
+  if [ "$policy_changed" = "true" ]; then
+    apply_ssh_runtime || error "Could not finalize the SSH runtime; old UFW rule remains."
+  fi
   verify_ssh_listener "$SSH_PORT" || error "Target SSH listener disappeared during finalization; old UFW rule remains."
 
   if verify_ssh_listener "$ORIGINAL_SSH_PORT"; then

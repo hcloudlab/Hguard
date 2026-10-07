@@ -113,3 +113,26 @@ if (configure_authorized_keys) 2>/dev/null; then
 fi
 
 pass "configure_authorized_keys refuses a symlinked ~/.ssh or authorized_keys"
+
+# configure_ssh_safely must only restart/reload SSH when the policy actually
+# changed - real atomic_write change-detection drives this, not a stub.
+mkdir -p "$(dirname "$SSHD_CONFIG")"
+printf 'Port 22\n' > "$SSHD_CONFIG"
+detect_ssh_runtime_mode() { SSH_RUNTIME_MODE="service"; SSH_SERVICE_UNIT="ssh.service"; }
+verify_effective_sshd_config() { return 0; }
+verify_ssh_listener() { return 0; }
+ufw_tcp_rule_exists() { return 0; }
+apply_runtime_count=0
+apply_ssh_runtime() { apply_runtime_count=$((apply_runtime_count + 1)); return 0; }
+
+SSH_PORT=2222
+ORIGINAL_SSH_PORT=2222
+PORT_MIGRATION_REQUIRED=false
+
+configure_ssh_safely
+assert_equal 1 "$apply_runtime_count" "first run with new policy content applies the SSH runtime"
+
+configure_ssh_safely
+assert_equal 1 "$apply_runtime_count" "rerun with unchanged policy content does not reapply the SSH runtime"
+
+pass "configure_ssh_safely skips apply_ssh_runtime when the policy content is unchanged"

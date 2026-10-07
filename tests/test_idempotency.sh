@@ -48,3 +48,33 @@ done
 last="$(cksum "$VPSGUARD_CONFIG_FILE" "$VPSGUARD_SSHD_CONFIG" "$BBR_SYSCTL_FILE" "$BBR_MODULES_FILE" "$CONNTRACK_SYSCTL_FILE" "$CONNTRACK_MODPROBE_FILE" "$CONNTRACK_MODULES_FILE" "$CONNTRACK_HELPER_FILE" "$CONNTRACK_SERVICE_FILE" "$VPSGUARD_MANAGED_RULES")"
 assert_equal "$first" "$last" "ten-run convergence"
 pass "10 consecutive simulated runs converge without content drift"
+
+temporary_root2="$(mktemp -d)"
+trap 'rm -rf "$temporary_root2"' EXIT
+target_file="$temporary_root2/managed.conf"
+
+atomic_write "$target_file" 644 'hello'
+assert_equal "true" "$ATOMIC_WRITE_CHANGED" "first write to a new path sets ATOMIC_WRITE_CHANGED=true"
+
+atomic_write "$target_file" 644 'hello'
+assert_equal "false" "$ATOMIC_WRITE_CHANGED" "rewriting identical content sets ATOMIC_WRITE_CHANGED=false"
+
+atomic_write "$target_file" 644 'hello again'
+assert_equal "true" "$ATOMIC_WRITE_CHANGED" "rewriting different content sets ATOMIC_WRITE_CHANGED=true"
+
+# The real regression this guards against: under set -euo pipefail, calling
+# atomic_write on unchanged content must NOT abort the script. Run this in a
+# fresh subshell with its own set -e so a non-zero return from atomic_write
+# would actually be caught, unlike the sourcing shell which may have laxer
+# settings by the time tests run.
+marker_file="$temporary_root2/reached-after-unchanged-write"
+rm -f "$marker_file"
+(
+  set -euo pipefail
+  . "$TEST_ROOT/install-core.sh"
+  atomic_write "$target_file" 644 'hello again'   # already on disk from above: unchanged
+  touch "$marker_file"
+)
+[ -f "$marker_file" ] || fail "script execution stopped after atomic_write hit unchanged content under set -e"
+
+pass "atomic_write reports change via ATOMIC_WRITE_CHANGED without ever failing on unchanged content"
