@@ -41,6 +41,10 @@ CONNTRACK_HELPER_FILE="${CONNTRACK_HELPER_FILE:-${HGUARD_STATE_DIR}/apply-conntr
 CONNTRACK_SERVICE_NAME="${CONNTRACK_SERVICE_NAME:-hguard-conntrack.service}"
 CONNTRACK_SERVICE_FILE="${CONNTRACK_SERVICE_FILE:-${SYSTEMD_SYSTEM_DIR}/${CONNTRACK_SERVICE_NAME}}"
 ROOT_AUTHORIZED_KEYS="${ROOT_AUTHORIZED_KEYS:-/root/.ssh/authorized_keys}"
+HGUARD_BIN_DIR="${HGUARD_BIN_DIR:-/usr/local/sbin}"
+HGUARD_LIB_DIR="${HGUARD_LIB_DIR:-/usr/local/lib/hguard}"
+HGUARD_CLI_PATH="${HGUARD_CLI_PATH:-${HGUARD_BIN_DIR}/hguard}"
+HGUARD_RAW_BASE_URL="${HGUARD_RAW_BASE_URL:-https://raw.githubusercontent.com/hcloudlab/Hguard}"
 
 OPTIMIZE_CONNTRACK="false"
 REQUESTED_NEW_USER="${NEW_USER:-}"
@@ -2332,6 +2336,77 @@ resolve_display_ip() {
   printf '%s\n' "${detected_ip:-SERVER_IP}"
 }
 
+# The five files that make up the hguard CLI once installed: this file
+# itself (constants/functions/installer) plus its lib-mode sibling scripts.
+hguard_cli_component_files() {
+  printf 'install-core.sh\nstatus.sh\nuninstall.sh\nverify.sh\nupdate.sh\n'
+}
+
+fetch_hguard_component() {
+  local name="$1" destination="$2" url
+
+  url="${HGUARD_RAW_BASE_URL}/v${HGUARD_VERSION}/${name}"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --proto '=https' --tlsv1.2 "$url" -o "$destination"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$destination" "$url"
+  else
+    return 1
+  fi
+}
+
+# Installs the hguard CLI: this file and its sibling scripts into
+# HGUARD_LIB_DIR, and a small dispatcher at HGUARD_CLI_PATH. A one-click
+# install only ever has install-core.sh on disk (install.sh downloaded just
+# that one file); any sibling not found next to it is fetched from
+# HGUARD_RAW_BASE_URL, the same way install.sh fetched install-core.sh
+# itself. Best-effort: failure here must never fail the install that
+# already succeeded.
+install_hguard_cli() {
+  local self_dir name source_path temp_download dispatcher_content
+
+  if self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"; then
+    :
+  else
+    self_dir=""
+  fi
+
+  ensure_directory "$HGUARD_LIB_DIR" 755
+
+  while IFS= read -r name; do
+    temp_download=""
+    if [ -n "$self_dir" ] && [ -f "${self_dir}/${name}" ]; then
+      source_path="${self_dir}/${name}"
+    else
+      temp_download="$(mktemp)"
+      if ! fetch_hguard_component "$name" "$temp_download"; then
+        warn "Could not fetch ${name} for the hguard CLI; /usr/local/lib/hguard is incomplete."
+        rm -f "$temp_download"
+        return 1
+      fi
+      source_path="$temp_download"
+    fi
+    install -m 755 "$source_path" "${HGUARD_LIB_DIR}/${name}"
+    [ -z "$temp_download" ] || rm -f "$temp_download"
+  done < <(hguard_cli_component_files)
+
+  dispatcher_content="#!/usr/bin/env bash
+set -euo pipefail
+# ${MANAGED_MARKER} ${HGUARD_VERSION}
+HGUARD_LIB_DIR=\"${HGUARD_LIB_DIR}\"
+case \"\${1:-}\" in
+  status) shift; exec bash \"\${HGUARD_LIB_DIR}/status.sh\" \"\$@\" ;;
+  verify) shift; exec bash \"\${HGUARD_LIB_DIR}/verify.sh\" \"\$@\" ;;
+  update) shift; exec bash \"\${HGUARD_LIB_DIR}/update.sh\" \"\$@\" ;;
+  uninstall) shift; exec bash \"\${HGUARD_LIB_DIR}/uninstall.sh\" \"\$@\" ;;
+  version) printf 'Hguard %s\\n' \"${HGUARD_VERSION}\" ;;
+  *) printf 'Usage: hguard {status|verify|update|uninstall|version}\\n' >&2; exit 1 ;;
+esac
+"
+  assert_managed_or_absent "$HGUARD_CLI_PATH"
+  atomic_write "$HGUARD_CLI_PATH" 755 "$dispatcher_content"
+}
+
 print_final_summary() {
   local resolved display_ip display_hint
   resolved="$(resolve_display_ip)"
@@ -2406,6 +2481,7 @@ main() {
 
   run_final_acceptance || error "Final acceptance failed. The installed marker was not written; keep the current SSH session open."
   remove_legacy_phase_markers
+  install_hguard_cli || warn "Could not install the hguard CLI (${HGUARD_CLI_PATH}); core hardening succeeded regardless."
   print_final_summary
 }
 
