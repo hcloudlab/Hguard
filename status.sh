@@ -103,6 +103,19 @@ print_managed_components_status() {
   fi
 }
 
+# D3: if a VPSGuard-managed file reappears after migration (e.g. someone
+# ran the old 0.3.7 installer again), warn loudly and list every one found
+# - it may conflict with the current Hguard configuration. Never removes
+# anything; this is a report, not a cleanup.
+print_legacy_vpsguard_warning() {
+  local found
+
+  found="$(legacy_vpsguard_files_present)"
+  [ -n "$found" ] || return 0
+  warn "检测到迁移后又出现了 VPSGuard 管理的文件，可能与当前 Hguard 配置冲突，请手动检查（不会自动删除）："
+  printf '%s\n' "$found" | sed 's/^/  - /'
+}
+
 print_conntrack_status() {
   local fields count maximum usage hashsize table_full health runtime_profile
 
@@ -283,6 +296,7 @@ main() {
   printf 'State: %s\n' "$HGUARD_STATE_FILE"
 
   print_managed_components_status
+  print_legacy_vpsguard_warning
 
   section "Managed administrator"
   printf 'Username: %s\n' "${managed_user:-not-configured}"

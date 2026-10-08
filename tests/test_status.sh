@@ -158,4 +158,21 @@ printf '%s\n' "$components_output" | grep -Fq 'Last apt-hook verification: PASS 
 
 pass "status reports each managed component's version and the apt hook's last verification result"
 
+### D3: a VPSGuard-managed file reappearing after migration (e.g. the old
+### 0.3.7 installer run again) must be warned about loudly, listing every
+### one found, and never removed.
+assert_equal "" "$(legacy_vpsguard_files_present)" "no legacy VPSGuard files present yet"
+mkdir -p "$(dirname "$VPSGUARD_LEGACY_FAIL2BAN_JAIL")"
+printf '# Managed by VPSGuard 0.3.7\n[sshd]\n' > "$VPSGUARD_LEGACY_FAIL2BAN_JAIL"
+assert_equal "$VPSGUARD_LEGACY_FAIL2BAN_JAIL" "$(legacy_vpsguard_files_present)" "a reappeared legacy file is detected"
+
+warning_output="$(print_legacy_vpsguard_warning)"
+printf '%s\n' "$warning_output" | grep -Fq "$VPSGUARD_LEGACY_FAIL2BAN_JAIL" || fail "the warning must list the reappeared file's path"
+[ -f "$VPSGUARD_LEGACY_FAIL2BAN_JAIL" ] || fail "print_legacy_vpsguard_warning must never remove anything"
+
+rm -f "$VPSGUARD_LEGACY_FAIL2BAN_JAIL"
+assert_equal "" "$(print_legacy_vpsguard_warning)" "no warning once the legacy file is gone"
+
+pass "status warns (without removing anything) when a VPSGuard-managed file reappears after migration"
+
 pass "status reports SSH listeners, behavior-based sudo mode details and conntrack health"

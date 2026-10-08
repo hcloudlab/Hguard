@@ -917,6 +917,41 @@ any_generation_marker_owns() {
   [ -f "$file" ] && head -n 2 "$file" | grep -Eq "^# (${MANAGED_MARKER}|${LEGACY_MANAGED_MARKER})( |\$)"
 }
 
+legacy_marker_owns() {
+  local file="$1"
+  [ -f "$file" ] && head -n 2 "$file" | grep -Eq "^# ${LEGACY_MANAGED_MARKER}( |\$)"
+}
+
+# Every path a VPSGuard-managed file could exist at (D3's third bullet):
+# used by `hguard status` to warn if one reappears after migration - e.g.
+# someone ran the old 0.3.7 installer again. Only reports what's actually
+# there; never removes anything.
+legacy_vpsguard_files_present() {
+  local new_user path candidates
+
+  if ! new_user="$(read_env_value "$HGUARD_CONFIG_FILE" NEW_USER 2>/dev/null)"; then new_user=""; fi
+  candidates="$VPSGUARD_LEGACY_SSHD_CONFIG
+$VPSGUARD_LEGACY_SSH_SOCKET_OVERRIDE
+$VPSGUARD_LEGACY_FAIL2BAN_JAIL
+$VPSGUARD_LEGACY_BBR_SYSCTL_FILE
+$VPSGUARD_LEGACY_BBR_MODULES_FILE
+$VPSGUARD_LEGACY_CONNTRACK_SYSCTL_FILE
+$VPSGUARD_LEGACY_CONNTRACK_MODPROBE_FILE
+$VPSGUARD_LEGACY_CONNTRACK_MODULES_FILE
+$VPSGUARD_LEGACY_CONNTRACK_HELPER_FILE
+$VPSGUARD_LEGACY_CONNTRACK_SERVICE_FILE"
+  if [ -n "$new_user" ]; then
+    candidates="${candidates}
+${SUDOERS_DIR}/vpsguard-${new_user}
+${SUDOERS_DIR}/90-vpsguard-${new_user}"
+  fi
+
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    legacy_marker_owns "$path" && printf '%s\n' "$path"
+  done <<< "$candidates"
+}
+
 user_in_sudo_group() {
   id -nG "$NEW_USER" 2>/dev/null | tr ' ' '\n' | grep -Fxq sudo
 }
@@ -2549,7 +2584,16 @@ remove_legacy_phase_markers() {
 # leaves the old (still-governing) configuration in place and errors out
 # rather than guessing at a recovery.
 migrate_from_vpsguard_needed() {
-  [ -d "$VPSGUARD_LEGACY_STATE_DIR" ] && [ ! -d "$HGUARD_STATE_DIR" ]
+  # Not "no $HGUARD_STATE_DIR yet": migrate_vpsguard_copy_state_files
+  # creates that directory as its first step, so checking its existence
+  # would make this return false after a migration that got partway
+  # through and failed - permanently stranding the system half-migrated,
+  # since a rerun would then never retry. VPSGUARD_MIGRATED_MARKER_FILE is
+  # written only once every step below has actually succeeded, so it is
+  # the only correct "fully done" signal; each step function below is
+  # itself safe to retry (every one starts by checking its own legacy
+  # source still exists).
+  [ -d "$VPSGUARD_LEGACY_STATE_DIR" ] && [ ! -f "$VPSGUARD_MIGRATED_MARKER_FILE" ]
 }
 
 migrate_vpsguard_copy_state_files() {
@@ -2672,7 +2716,13 @@ migrate_vpsguard_sudoers() {
   fi
   legacy_file="${SUDOERS_DIR}/vpsguard-${new_user}"
   legacy_legacy_file="${SUDOERS_DIR}/90-vpsguard-${new_user}"
-  new_file="$(sudoers_file_for_user)"
+  # Not sudoers_file_for_user(): that reads the global $NEW_USER, which
+  # resolve_managed_user hasn't set yet at migration time (migration runs
+  # before it) - using it here would silently compute the wrong path
+  # (missing the username entirely) and leave the migrated sudo grant
+  # orphaned under a filename Hguard's own status/uninstall logic never
+  # looks for.
+  new_file="${SUDOERS_DIR}/hguard-${new_user}"
 
   if [ -f "$legacy_file" ]; then
     cp -p "$legacy_file" "$new_file"
@@ -2756,9 +2806,28 @@ migrate_from_vpsguard() {
 
   info "检测到 VPSGuard 安装，正在迁移到 Hguard..."
   migrate_vpsguard_copy_state_files
-  migrate_vpsguard_sshd
-  migrate_vpsguard_fail2ban
-  migrate_vpsguard_sudoers
+
+  # Each of these already warns and safely rolls back its own subsystem
+  # on failure (old VPSGuard config/file left fully in charge) - but under
+  # set -e, calling a function that returns nonzero as a bare statement
+  # aborts this whole script right there, with the MIGRATED marker never
+  # written and no further steps run. Checking explicitly instead lets a
+  # single subsystem's failure stop *migration* (rerun to retry - see
+  # migrate_from_vpsguard_needed) without killing the rest of main()'s
+  # install flow, which must still run against whatever did or didn't
+  # finish migrating.
+  if ! migrate_vpsguard_sshd; then
+    warn "VPSGuard 迁移未完成（sshd 部分失败，已保留原有配置）；重新运行安装器可重试迁移。"
+    return 1
+  fi
+  if ! migrate_vpsguard_fail2ban; then
+    warn "VPSGuard 迁移未完成（fail2ban 部分失败，已保留原有配置）；重新运行安装器可重试迁移。"
+    return 1
+  fi
+  if ! migrate_vpsguard_sudoers; then
+    warn "VPSGuard 迁移未完成（sudoers 部分失败，已保留原有配置）；重新运行安装器可重试迁移。"
+    return 1
+  fi
   migrate_vpsguard_bbr_and_conntrack_files
   migrate_vpsguard_conntrack_service
 
@@ -2778,7 +2847,10 @@ main() {
     optimize_conntrack
     return 0
   fi
-  migrate_from_vpsguard
+  # An incomplete migration (already warned about internally) must not
+  # abort the rest of main() via set -e - the normal install flow below
+  # still needs to run against whatever state resulted.
+  migrate_from_vpsguard || true
   ensure_directory "$HGUARD_STATE_DIR" 700
   prepare_sshd_runtime_directory
   resolve_managed_user
