@@ -402,7 +402,12 @@ resolve_managed_user() {
     warn "Management is moving from ${PREVIOUS_MANAGED_USER} to ${NEW_USER}; the old user and its data will be preserved."
   fi
   validate_existing_user_account "$NEW_USER"
-  if id "$NEW_USER" >/dev/null 2>&1; then
+  # Only confirm when NEW_USER is an existing OS account VPSGuard did not
+  # already manage. When it's the same user recorded in config.env, the
+  # "1. 继续使用" menu choice above (or a non-interactive rerun with the
+  # same NEW_USER) is already that confirmation - asking again with a
+  # literal "YES" is a redundant second gate that has caused mis-taps.
+  if [ "$NEW_USER" != "$PREVIOUS_MANAGED_USER" ] && id "$NEW_USER" >/dev/null 2>&1; then
     confirm_existing_user "$NEW_USER"
   fi
 }

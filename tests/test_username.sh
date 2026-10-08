@@ -65,3 +65,32 @@ if grep -RIn --exclude-dir=.git --exclude='CHANGELOG.md' --exclude='test_usernam
 fi
 
 pass "username validation, interactive retry, existing-user reuse and non-interactive behavior"
+
+# Reusing the managed user already recorded in config.env must not trigger
+# confirm_existing_user's "input YES" prompt a second time - the operator
+# already confirmed this via the "1. 继续使用" menu choice (or simply by not
+# overriding NEW_USER). Only a newly specified, already-existing but not-
+# yet-managed username should still require that confirmation.
+config_file_existing="$temporary_root/config-existing.env"
+printf "NEW_USER='admin'\n" > "$config_file_existing"
+confirm_marker="$temporary_root/confirm-called"
+
+rm -f "$confirm_marker"
+VPSGUARD_TEST_MODE=1 VPSGUARD_CONFIG_FILE="$config_file_existing" CONFIRM_MARKER="$confirm_marker" bash -c '
+  . "$1"
+  id() { return 0; }
+  confirm_existing_user() { : > "$CONFIRM_MARKER"; }
+  resolve_managed_user
+' _ "$TEST_ROOT/install.sh" </dev/null
+[ ! -e "$confirm_marker" ] || fail "confirm_existing_user must not run when NEW_USER matches the already-recorded managed user"
+
+rm -f "$confirm_marker"
+VPSGUARD_TEST_MODE=1 VPSGUARD_CONFIG_FILE="$config_file_existing" NEW_USER=otheruser CONFIRM_MARKER="$confirm_marker" bash -c '
+  . "$1"
+  id() { return 0; }
+  confirm_existing_user() { : > "$CONFIRM_MARKER"; }
+  resolve_managed_user
+' _ "$TEST_ROOT/install.sh" </dev/null
+[ -e "$confirm_marker" ] || fail "confirm_existing_user must still run for a newly specified, already-existing non-managed user"
+
+pass "confirm_existing_user's redundant YES prompt is skipped only when reusing the already-recorded managed user"
