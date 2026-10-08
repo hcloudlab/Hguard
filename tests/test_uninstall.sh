@@ -233,3 +233,21 @@ ufw() {
 assert_success ufw_tcp_rule_exists 2345
 
 pass "ufw_tcp_rule_exists also checks ufw show added, not just ufw status"
+
+# any_generation_marker_owns is for migration/status/uninstall callers that
+# need to find a leftover VPSGuard-era (pre-rename) file too; it must not
+# become the default check used when writing or validating a current file.
+current_marker_file="$temporary_root/current.conf"
+legacy_marker_file="$temporary_root/legacy.conf"
+unrecognized_file="$temporary_root/unrecognized.conf"
+printf '# Managed by Hguard 0.4.0\n' > "$current_marker_file"
+printf '# Managed by VPSGuard 0.3.7\n' > "$legacy_marker_file"
+printf '# Managed by SomethingElse\n' > "$unrecognized_file"
+
+assert_success any_generation_marker_owns "$current_marker_file"
+assert_success any_generation_marker_owns "$legacy_marker_file"
+assert_failure any_generation_marker_owns "$unrecognized_file"
+assert_success managed_file_is_owned "$current_marker_file"
+assert_failure managed_file_is_owned "$legacy_marker_file"
+
+pass "any_generation_marker_owns recognizes both the current and legacy VPSGuard marker"

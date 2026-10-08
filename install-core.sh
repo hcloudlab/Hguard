@@ -63,6 +63,12 @@ INSTALLER_IP=""
 FAIL2BAN_READY_ATTEMPTS=15
 SSHD_INCLUDE_BEGIN="# BEGIN Hguard managed include"
 SSHD_INCLUDE_END="# END Hguard managed include"
+MANAGED_MARKER="Managed by Hguard"
+# The VPSGuard-era marker (pre-rename). Only migrate_from_vpsguard() and the
+# dual-recognition helpers below should ever look for this - everything
+# that writes or validates a *current* Hguard-managed file uses
+# MANAGED_MARKER alone.
+LEGACY_MANAGED_MARKER="Managed by VPSGuard"
 
 GREEN="\033[32m"
 YELLOW="\033[33m"
@@ -153,7 +159,7 @@ atomic_write() {
 
 assert_managed_or_absent() {
   local path="$1"
-  if [ -e "$path" ] && ! head -n 2 "$path" | grep -Fq 'Managed by Hguard'; then
+  if [ -e "$path" ] && ! head -n 2 "$path" | grep -Fq "$MANAGED_MARKER"; then
     error "Refusing to overwrite an unrecognized existing file: ${path}"
   fi
 }
@@ -816,7 +822,16 @@ legacy_sudoers_file_for_user() {
 
 managed_file_is_owned() {
   local file="$1"
-  [ -f "$file" ] && head -n 2 "$file" | grep -Eq '^# Managed by Hguard( |$)'
+  [ -f "$file" ] && head -n 2 "$file" | grep -Eq "^# ${MANAGED_MARKER}( |\$)"
+}
+
+# Like managed_file_is_owned, but also recognizes a VPSGuard-era (pre-rename)
+# file. Only for migration/status/uninstall callers that need to find or
+# report on a leftover old-generation file; every current-generation write
+# or validation path keeps using managed_file_is_owned (current marker only).
+any_generation_marker_owns() {
+  local file="$1"
+  [ -f "$file" ] && head -n 2 "$file" | grep -Eq "^# (${MANAGED_MARKER}|${LEGACY_MANAGED_MARKER})( |\$)"
 }
 
 user_in_sudo_group() {
