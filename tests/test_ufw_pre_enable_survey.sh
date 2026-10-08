@@ -25,6 +25,42 @@ assert_equal "443/tcp	nginx
 
 pass "survey_foreign_listening_ports excludes SSH and loopback listeners"
 
+# Real `ss -ltnupH` output captured on an AWS Ubuntu 24.04 instance. Two
+# past bugs made this misreport: (1) a second `ss -lunupH` call (no Netid
+# column) used to be concatenated in, which misread its peer-address "*" as
+# the port and its state as the protocol; (2) loopback addresses decorated
+# with a %ifname suffix (systemd-resolve's 127.0.0.53%lo) or IPv6 brackets
+# ([::1]) were not recognized as loopback. The only real foreign listener
+# here is systemd-network's DHCP client on the public-ish interface address.
+export SS_LISTEN_ALL_OUTPUT_OVERRIDE='udp UNCONN 0      0                127.0.0.54:53    0.0.0.0:*  users:(("systemd-resolve",pid=9094,fd=16))
+udp UNCONN 0      0             127.0.0.53%lo:53    0.0.0.0:*  users:(("systemd-resolve",pid=9094,fd=14))
+udp UNCONN 0      0        172.31.23.127%ens5:68    0.0.0.0:*  users:(("systemd-network",pid=4210,fd=22))
+udp UNCONN 0      0                 127.0.0.1:323   0.0.0.0:*  users:(("chronyd",pid=718,fd=5))
+udp UNCONN 0      0                     [::1]:323      [::]:*  users:(("chronyd",pid=718,fd=6))
+tcp LISTEN 0      4096          127.0.0.53%lo:53    0.0.0.0:*  users:(("systemd-resolve",pid=9094,fd=15))
+tcp LISTEN 0      4096                0.0.0.0:22    0.0.0.0:*  users:(("sshd",pid=24473,fd=3),("systemd",pid=1,fd=143))
+tcp LISTEN 0      4096             127.0.0.54:53    0.0.0.0:*  users:(("systemd-resolve",pid=9094,fd=17))
+tcp LISTEN 0      4096                   [::]:22       [::]:*  users:(("sshd",pid=24473,fd=4),("systemd",pid=1,fd=144))'
+SSH_PORT=22
+result="$(survey_foreign_listening_ports)"
+assert_equal "68/udp	systemd-network" "$result" "only the non-loopback DHCP client listener survives the real AWS ss output"
+
+pass "survey_foreign_listening_ports handles real AWS ss output: %ifname loopback, no redundant udp-only call"
+
+# A second ss -ltnupH case with both an IPv4 and an IPv6 listener on the
+# same TCP port, plus a UDP listener, to confirm dedup-by-port/proto and
+# IPv6 bracket handling together.
+export SS_LISTEN_ALL_OUTPUT_OVERRIDE='tcp LISTEN 0 4096 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=1,fd=3))
+tcp LISTEN 0 511 0.0.0.0:443 0.0.0.0:* users:(("nginx",pid=2,fd=4))
+tcp LISTEN 0 511 [::]:443 [::]:* users:(("nginx",pid=2,fd=5))
+udp UNCONN 0 0 0.0.0.0:8443 0.0.0.0:* users:(("myapp",pid=4,fd=6))'
+SSH_PORT=22
+result="$(survey_foreign_listening_ports)"
+assert_equal "443/tcp	nginx
+8443/udp	myapp" "$result" "dual-stack tcp listener on the same port is deduplicated; udp listener is kept"
+
+pass "survey_foreign_listening_ports deduplicates a dual-stack TCP port and keeps a UDP port"
+
 assert_equal "443/tcp
 8443/udp" "$(parse_allow_ports '443/tcp,8443/udp')" "parse_allow_ports normalizes a valid list"
 

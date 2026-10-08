@@ -48,8 +48,8 @@ assert_equal inactive \
   "inactive systemd socket does not report configured port as a listener"
 
 
-listener_22='LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=1,fd=3))'
-listener_2222='LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* users:(("sshd",pid=1,fd=3))'
+listener_22='tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=1,fd=3))'
+listener_2222='tcp LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* users:(("sshd",pid=1,fd=3))'
 listeners_both="${listener_22}"$'\n'"${listener_2222}"
 
 assert_equal not-started \

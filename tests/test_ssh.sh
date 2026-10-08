@@ -32,7 +32,7 @@ passwordauthentication yes
 pubkeyauthentication yes'
 assert_failure verify_effective_sshd_config
 
-listener='LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* users:(("sshd",pid=123,fd=3))'
+listener='tcp LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* users:(("sshd",pid=123,fd=3))'
 printf '%s\n' "$listener" | ssh_listener_present_from_text 2222 || fail "target listener was not recognized"
 if printf '%s\n' "$listener" | ssh_listener_present_from_text 22; then
   fail "listener check used a substring port match"

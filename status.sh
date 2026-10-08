@@ -310,9 +310,11 @@ systemd_socket_listeners_for_state_from_text() {
 ssh_listener_present() {
   local port="$1"
   local output="$2"
+  # ss -ltnpH's first column is the Netid (tcp/udp), so the state is $2 and
+  # the local address:port is $5 - not $1/$4.
   printf '%s\n' "$output" | awk -v wanted="$port" '
-    $1 == "LISTEN" {
-      address=$4
+    $2 == "LISTEN" {
+      address=$5
       sub(/^.*:/, "", address)
       if (address == wanted && ($0 ~ /sshd/ || $0 ~ /systemd/)) found=1
     }

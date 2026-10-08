@@ -1124,7 +1124,14 @@ parse_allow_ports() {
 
 survey_foreign_listening_ports() {
   local output
-  output="${SS_LISTEN_ALL_OUTPUT_OVERRIDE:-$(ss -ltnupH 2>/dev/null; ss -lunupH 2>/dev/null)}"
+  # ss -ltnupH already covers both TCP and UDP listeners (via -t and -u
+  # together) with a Netid column, so a second ss -lunupH call is both
+  # redundant and wrong: without -t, that output has no Netid column, which
+  # shifts every field left by one - $5 (meant to be the local address) ends
+  # up holding the peer address instead, usually "0.0.0.0:*", and $1 (meant
+  # to be the protocol) holds the state (e.g. "UNCONN"), so every port from
+  # that call was misread as TCP port "*".
+  output="${SS_LISTEN_ALL_OUTPUT_OVERRIDE:-$(ss -ltnupH 2>/dev/null)}"
   printf '%s\n' "$output" | awk -v ssh_port="$SSH_PORT" '
     {
       proto = (tolower($1) == "udp") ? "udp" : "tcp"
@@ -1132,7 +1139,13 @@ survey_foreign_listening_ports() {
       n = split(addr, parts, ":")
       port = parts[n]
       host = substr(addr, 1, length(addr) - length(port) - 1)
-      if (host == "127.0.0.1" || host == "::1") next
+      # Strip an interface-scoped address'"'"'s %ifname suffix (e.g.
+      # "127.0.0.53%lo" or a bracketed IPv6 "[fe80::1%eth0]") and IPv6
+      # brackets, so the loopback check below matches the real address
+      # instead of silently failing against a decorated one.
+      sub(/%[^]]*/, "", host)
+      gsub(/[][]/, "", host)
+      if (host ~ /^127\./ || host == "::1") next
       if (port == ssh_port) next
       process = "unknown"
       if (match($0, /users:\(\("[^"]+"/)) {
@@ -1415,9 +1428,11 @@ apply_ssh_runtime() {
 
 ssh_listener_present_from_text() {
   local port="$1"
+  # ss -ltnpH's first column is the Netid (tcp/udp), so the state is $2 and
+  # the local address:port is $5 - not $1/$4.
   awk -v wanted="$port" '
-    $1 == "LISTEN" {
-      address=$4
+    $2 == "LISTEN" {
+      address=$5
       sub(/^.*:/, "", address)
       if (address == wanted && ($0 ~ /sshd/ || $0 ~ /systemd/)) found=1
     }
