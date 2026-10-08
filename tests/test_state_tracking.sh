@@ -44,6 +44,8 @@ pass "pre-install state is immutable and managed rules are unique"
 # print_final_summary must report the server IP from `hostname -I` only, with
 # no external network call.
 curl() { fail "print_final_summary must not call curl/network for the server IP"; }
+# Called indirectly by print_final_summary.
+# shellcheck disable=SC2329
 hostname() { [ "$1" = "-I" ] && printf '203.0.113.5 fe80::1\n'; }
 NEW_USER="admin"
 SUDO_MODE="passwordless"

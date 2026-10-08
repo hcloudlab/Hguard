@@ -29,7 +29,7 @@ restricted_line="no-port-forwarding,no-agent-forwarding,no-X11-forwarding,comman
 from_restricted_line='from="10.0.0.0/8" '"${root_pubkey}"
 
 reset_sandbox() {
-  rm -rf "$temporary_root/home" "$VPSGUARD_INSTALLED_MARKER" "$ROOT_AUTHORIZED_KEYS"
+  rm -rf "${temporary_root:?}/home" "${VPSGUARD_INSTALLED_MARKER:?}" "${ROOT_AUTHORIZED_KEYS:?}"
   mkdir -p "$VPSGUARD_STATE_DIR"
   unset SUDO_USER
 }
@@ -54,6 +54,8 @@ fi
 reset_sandbox
 printf '%s\n' "$restricted_line" > "$ROOT_AUTHORIZED_KEYS"
 export SUDO_USER="ubuntu"
+# Called indirectly by resolve_admin_pubkey_source.
+# shellcheck disable=SC2329
 getent() {
   if [ "$1" = "passwd" ] && [ "$2" = "ubuntu" ]; then
     printf 'ubuntu:x:1000:1000::%s/home/ubuntu:/bin/bash\n' "$temporary_root"
