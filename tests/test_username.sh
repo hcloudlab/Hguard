@@ -94,3 +94,21 @@ HGUARD_TEST_MODE=1 HGUARD_CONFIG_FILE="$config_file_existing" NEW_USER=otheruser
 [ -e "$confirm_marker" ] || fail "confirm_existing_user must still run for a newly specified, already-existing non-managed user"
 
 pass "confirm_existing_user's redundant YES prompt is skipped only when reusing the already-recorded managed user"
+
+# sudo silently ignores any /etc/sudoers.d/ file whose name contains a "."
+# or ends in "~" - validate_username's character set (lowercase letters,
+# digits, underscore, hyphen) can never produce either on its own, but the
+# hguard-<user> filename as a whole must still be checked, since a bug in
+# the "hguard-" prefix or a future change to validate_username could
+# silently reintroduce one.
+for candidate_user in deploy service_admin-2 a b_c-d9; do
+  assert_success validate_username "$candidate_user"
+  NEW_USER="$candidate_user"
+  sudoers_name="$(basename "$(sudoers_file_for_user)")"
+  case "$sudoers_name" in
+    *.*) fail "sudoers filename for user '${candidate_user}' contains a dot: ${sudoers_name}" ;;
+    *~) fail "sudoers filename for user '${candidate_user}' ends in a tilde: ${sudoers_name}" ;;
+  esac
+done
+
+pass "sudoers_file_for_user never produces a filename sudo would silently ignore (no dot, no trailing tilde)"
