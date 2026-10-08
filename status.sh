@@ -414,7 +414,7 @@ configured_sudo_mode() {
 
 main() {
   local managed_user ssh_port original_port install_status sudo_mode user_entry user_home user_shell
-  local authorized_keys sudoers_file effective_sshd listeners available_cc current_cc current_qdisc key_owner
+  local authorized_keys sudoers_file effective_sshd listeners available_cc current_cc current_qdisc key_owner ssh_dir_owner
   local password_state sudo_policy sudo_group_member="no" passwordless_effective="no"
   local ssh_socket_state ssh_service_state sshd_service_state ufw_state="inactive"
   local client_address host_context effective_socket_listeners port_finalization
@@ -449,9 +449,14 @@ main() {
     if [ -s "$authorized_keys" ]; then
       printf 'authorized_keys: present and non-empty (contents hidden)\n'
       key_owner="$(stat -c '%U:%G' "$authorized_keys" 2>/dev/null || printf unknown)"
+      ssh_dir_owner="$(stat -c '%U:%G' "${user_home}/.ssh" 2>/dev/null || printf unknown)"
       printf 'authorized_keys owner: %s\n' "$key_owner"
+      printf '.ssh owner: %s\n' "$ssh_dir_owner"
       printf '.ssh mode: %s\n' "$(stat -c '%a' "${user_home}/.ssh" 2>/dev/null || printf unknown)"
       printf 'authorized_keys mode: %s\n' "$(stat -c '%a' "$authorized_keys" 2>/dev/null || printf unknown)"
+      if [ "$ssh_dir_owner" != "${managed_user}:${managed_user}" ]; then
+        warn ".ssh 属主不是 ${managed_user}:${managed_user}（实际为 ${ssh_dir_owner}）；sshd 可能因此拒绝公钥登录。"
+      fi
     else
       warn "authorized_keys is missing or empty"
     fi

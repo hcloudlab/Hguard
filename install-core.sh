@@ -719,6 +719,18 @@ root_pubkey_sync_required() {
   return 1
 }
 
+# The admin's own ~/.ssh is not a VPSGuard-owned directory like the ones
+# ensure_directory manages (which it chowns to root:root) - it must stay
+# owned by the admin, or sshd (reading authorized_keys as that user) will
+# refuse to even enter the directory and reject an otherwise-valid key.
+ensure_admin_ssh_directory() {
+  local ssh_directory="$1"
+
+  mkdir -p "$ssh_directory"
+  chown "${NEW_USER}:${NEW_USER}" "$ssh_directory"
+  chmod 700 "$ssh_directory"
+}
+
 configure_authorized_keys() {
   local user_home ssh_directory authorized_keys temporary_file pubkey_source
 
@@ -737,13 +749,19 @@ configure_authorized_keys() {
     error "${authorized_keys} is a symlink; refusing to follow it."
   fi
 
-  ensure_directory "$ssh_directory" 700
+  # ensure_directory is for root-owned VPSGuard directories; it chowns to
+  # root:root, which would leave the admin's own ~/.ssh unreadable by sshd
+  # under their identity. Every return path below - including the "leave
+  # untouched" rerun fast path - must go through this instead.
+  ensure_admin_ssh_directory "$ssh_directory"
 
   purge_root_forced_command_residue "$authorized_keys" "$ROOT_AUTHORIZED_KEYS"
 
   if ! root_pubkey_sync_required; then
-    chmod 700 "$ssh_directory"
-    [ ! -f "$authorized_keys" ] || chmod 600 "$authorized_keys"
+    if [ -f "$authorized_keys" ]; then
+      chown "${NEW_USER}:${NEW_USER}" "$authorized_keys"
+      chmod 600 "$authorized_keys"
+    fi
     info "Administrator authorized_keys left untouched (not first install, existing keys present)."
     return 0
   fi
@@ -2100,16 +2118,18 @@ optimize_conntrack() {
 }
 
 verify_authorized_keys() {
-  local user_home ssh_directory authorized_keys owner ssh_mode key_mode
+  local user_home ssh_directory authorized_keys owner ssh_owner ssh_mode key_mode
 
   user_home="$(managed_user_home)"
   ssh_directory="${user_home}/.ssh"
   authorized_keys="${ssh_directory}/authorized_keys"
   [ -s "$authorized_keys" ] || return 1
   if ! owner="$(stat -c '%U:%G' "$authorized_keys" 2>/dev/null)"; then owner=""; fi
+  if ! ssh_owner="$(stat -c '%U:%G' "$ssh_directory" 2>/dev/null)"; then ssh_owner=""; fi
   if ! ssh_mode="$(stat -c '%a' "$ssh_directory" 2>/dev/null)"; then ssh_mode=""; fi
   if ! key_mode="$(stat -c '%a' "$authorized_keys" 2>/dev/null)"; then key_mode=""; fi
-  [ "$owner" = "${NEW_USER}:${NEW_USER}" ] && [ "$ssh_mode" = "700" ] && [ "$key_mode" = "600" ]
+  [ "$owner" = "${NEW_USER}:${NEW_USER}" ] && [ "$ssh_owner" = "${NEW_USER}:${NEW_USER}" ] \
+    && [ "$ssh_mode" = "700" ] && [ "$key_mode" = "600" ]
 }
 
 verify_ssh_runtime_healthy() {

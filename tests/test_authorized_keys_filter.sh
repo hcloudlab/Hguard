@@ -14,6 +14,8 @@ mkdir -p "$VPSGUARD_STATE_DIR"
 # shellcheck source=install-core.sh
 . "$TEST_ROOT/install-core.sh"
 
+# Called indirectly by ensure_admin_ssh_directory / configure_authorized_keys.
+# shellcheck disable=SC2329
 chown() { :; }  # NEW_USER below is not a real OS account in this test sandbox
 
 export ROOT_AUTHORIZED_KEYS="$temporary_root/root-authorized_keys"
@@ -100,6 +102,8 @@ pass "check_root_ssh_key fails closed when no usable key exists anywhere"
 reset_sandbox
 printf '%s\n' "$restricted_line" > "$ROOT_AUTHORIZED_KEYS"
 export SUDO_USER="ubuntu"
+# Called indirectly by resolve_admin_pubkey_source.
+# shellcheck disable=SC2329
 getent() {
   if [ "$1" = "passwd" ] && [ "$2" = "ubuntu" ]; then
     printf 'ubuntu:x:1000:1000::%s/home/ubuntu:/bin/bash\n' "$temporary_root"
@@ -122,3 +126,60 @@ fi
 assert_equal 1 "$(grep -c . "$fake_user_home/.ssh/authorized_keys")" "only the legitimate key line remains"
 
 pass "a residual forced-command line is purged from the admin's authorized_keys on rerun"
+
+### 6. Regression: ensure_admin_ssh_directory, not ensure_directory, must
+### chown the admin's ~/.ssh even on the "leave untouched" rerun fast path.
+### ensure_directory chowns root:root; using it there is exactly what caused
+### "Permission denied (publickey)" after a real rerun on Vultr while
+### install still reported success - sshd reads authorized_keys as the
+### admin and cannot even enter a root:root .ssh directory.
+reset_sandbox
+printf '%s\n' "$restricted_line" > "$ROOT_AUTHORIZED_KEYS"
+export SUDO_USER="ubuntu"
+getent() {
+  if [ "$1" = "passwd" ] && [ "$2" = "ubuntu" ]; then
+    printf 'ubuntu:x:1000:1000::%s/home/ubuntu:/bin/bash\n' "$temporary_root"
+  fi
+}
+mkdir -p "$temporary_root/home/ubuntu/.ssh"
+printf '%s\n' "$sudo_user_pubkey" > "$temporary_root/home/ubuntu/.ssh/authorized_keys"
+
+mkdir -p "$fake_user_home/.ssh"
+printf '%s\n' "$sudo_user_pubkey" > "$fake_user_home/.ssh/authorized_keys"
+chmod 700 "$fake_user_home/.ssh"
+chmod 600 "$fake_user_home/.ssh/authorized_keys"
+printf 'success\n' > "$VPSGUARD_INSTALLED_MARKER"  # rerun -> "leave untouched" fast path
+
+chown_log="$temporary_root/chown.log"
+rm -f "$chown_log"
+# Replaces the file-level no-op chown() stub above with one that records
+# calls, so this test can assert ~/.ssh itself was re-chowned.
+# Called indirectly by ensure_admin_ssh_directory / configure_authorized_keys.
+# shellcheck disable=SC2329
+chown() { printf '%s\n' "$*" >> "$chown_log"; }
+
+assert_success configure_authorized_keys
+assert_file_contains "$chown_log" "admin:admin ${fake_user_home}/.ssh"
+
+pass "configure_authorized_keys chowns ~/.ssh to the admin even on the rerun fast path"
+
+### 7. verify_authorized_keys must fail when ~/.ssh itself is not owned by
+### the admin, even if authorized_keys's own ownership and modes look fine -
+### this is the real-world symptom (root:root .ssh) that must block
+### acceptance instead of reporting success.
+# Called indirectly by verify_authorized_keys.
+# shellcheck disable=SC2329
+stat() {
+  case "$*" in
+    "-c %U:%G ${fake_user_home}/.ssh") printf 'root:root\n' ;;
+    "-c %U:%G ${fake_user_home}/.ssh/authorized_keys") printf 'admin:admin\n' ;;
+    "-c %a ${fake_user_home}/.ssh") printf '700\n' ;;
+    "-c %a ${fake_user_home}/.ssh/authorized_keys") printf '600\n' ;;
+    *) return 1 ;;
+  esac
+}
+if (verify_authorized_keys) 2>/dev/null; then
+  fail "verify_authorized_keys must fail when ~/.ssh is owned by root instead of the admin"
+fi
+
+pass "verify_authorized_keys fails closed when ~/.ssh ownership does not match the admin"
