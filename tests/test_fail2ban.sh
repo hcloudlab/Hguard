@@ -112,6 +112,8 @@ assert_equal 1 "$restart_count" "unchanged jail content but inactive fail2ban.se
 restart_count=0
 service_active="true"
 sshd_jail_available="false"
+# Called below, before being redefined further down for the next scenario.
+# shellcheck disable=SC2329
 systemctl() {
   case "$*" in
     'enable fail2ban.service') return 0 ;;
@@ -120,6 +122,7 @@ systemctl() {
     *) return 1 ;;
   esac
 }
+# shellcheck disable=SC2329
 fail2ban-client() {
   [ "$1" = "-t" ] && return 0
   [ "$*" = "status sshd" ] && [ "$sshd_jail_available" = "true" ]
@@ -128,3 +131,67 @@ configure_fail2ban
 assert_equal 1 "$restart_count" "unchanged jail content but unavailable sshd jail still restarts"
 
 pass "configure_fail2ban restarts when runtime state is wrong, even if the jail file is unchanged"
+
+# The installer's own connection IP must be exempted from fail2ban, or a
+# client that retries several local SSH keys before the right one can ban
+# its own installer for an hour - reproduced on a real Vultr instance.
+assert_success looks_like_ip_address 203.0.113.5
+assert_success looks_like_ip_address 2001:db8::1
+assert_failure looks_like_ip_address "not an ip"
+assert_failure looks_like_ip_address ""
+
+SSH_CONNECTION="203.0.113.5 54321 198.51.100.1 22"
+assert_equal 203.0.113.5 "$(current_connection_ip)" "SSH_CONNECTION's first field is the client address"
+
+# sudo -i can clear SSH_CONNECTION; who -m's "(address)" suffix is the
+# fallback.
+SSH_CONNECTION=""
+# Called indirectly by current_connection_ip.
+# shellcheck disable=SC2329
+who() { [ "$1" = "-m" ] && printf 'admin    pts/0        2026-10-08 10:00 (198.51.100.42)\n'; }
+assert_equal 198.51.100.42 "$(current_connection_ip)" "who -m's address is used when SSH_CONNECTION is empty"
+
+# Neither source yields an address: current_connection_ip must fail, and
+# configure_fail2ban must neither add a bogus ignoreip entry nor silently
+# say nothing about it.
+SSH_CONNECTION=""
+who() { [ "$1" = "-m" ] && printf 'admin    pts/0        2026-10-08 10:00\n'; }
+assert_failure current_connection_ip
+
+temporary_root="$(mktemp -d)"
+trap 'rm -rf "$temporary_root"' EXIT
+FAIL2BAN_JAIL="$temporary_root/vpsguard-sshd.local"
+SSH_PORT=22
+ORIGINAL_SSH_PORT=22
+VPSGUARD_PENDING_PORT_MARKER="$temporary_root/.pending-port-finalization"
+rm -f "$VPSGUARD_PENDING_PORT_MARKER"
+systemctl() {
+  case "$*" in
+    'enable fail2ban.service') return 0 ;;
+    'restart fail2ban.service') return 0 ;;
+    'is-active --quiet fail2ban.service') return 0 ;;
+    *) return 1 ;;
+  esac
+}
+fail2ban-client() {
+  [ "$1" = "-t" ] && return 0
+  [ "$*" = "status sshd" ] && return 0
+  return 1
+}
+
+fail2ban_no_ip_output_file="$temporary_root/configure-fail2ban-output.log"
+configure_fail2ban > "$fail2ban_no_ip_output_file" 2>&1
+assert_file_contains "$FAIL2BAN_JAIL" 'ignoreip = 127.0.0.1/8 ::1'
+if grep -q '[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}$' "$FAIL2BAN_JAIL"; then
+  fail "no extra address should be appended to ignoreip when none could be determined"
+fi
+assert_file_contains "$fail2ban_no_ip_output_file" '无法确定当前连接的来源 IP'
+assert_equal "" "$INSTALLER_IP" "INSTALLER_IP stays empty when no connection address could be determined"
+
+SSH_CONNECTION="203.0.113.5 54321 198.51.100.1 22"
+rm -f "$FAIL2BAN_JAIL"
+configure_fail2ban
+assert_file_contains "$FAIL2BAN_JAIL" 'ignoreip = 127.0.0.1/8 ::1 203.0.113.5'
+assert_equal 203.0.113.5 "$INSTALLER_IP" "configure_fail2ban records the installer's IP for the final summary"
+
+pass "configure_fail2ban exempts the current connection's IP, or warns if none could be determined"

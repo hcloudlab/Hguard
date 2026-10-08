@@ -53,6 +53,7 @@ INSTALL_STATUS="failed"
 BBR_STATUS="unsupported"
 SSH_RUNTIME_MODE="unknown"
 SSH_SERVICE_UNIT=""
+INSTALLER_IP=""
 FAIL2BAN_READY_ATTEMPTS=15
 SSHD_INCLUDE_BEGIN="# BEGIN VPSGuard managed include"
 SSHD_INCLUDE_END="# END VPSGuard managed include"
@@ -1568,13 +1569,49 @@ wait_for_fail2ban_sshd_jail() {
   return 1
 }
 
+# A lightweight sanity check, not full RFC validation (matching
+# is_private_ipv4's style) - just enough to refuse obviously-not-an-address
+# input before it lands in a jail config.
+looks_like_ip_address() {
+  local ip="$1"
+  [[ "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] && return 0
+  [[ "$ip" == *:* && "$ip" =~ ^[0-9A-Fa-f:]+$ ]] && return 0
+  return 1
+}
+
+# The current SSH client's address, so it can be exempted from fail2ban -
+# otherwise a client that retries several local keys before the right one
+# can ban its own installer. SSH_CONNECTION (sshd sets it per-session) is
+# tried first; `sudo -i` can clear it, so `who -m`'s "(address)" suffix for
+# the current TTY is the fallback. Prints nothing and fails if neither
+# yields something that looks like an address.
+current_connection_ip() {
+  local ip
+
+  ip="$(printf '%s\n' "${SSH_CONNECTION:-}" | awk 'NF >= 1 {print $1}')"
+  if [ -z "$ip" ]; then
+    ip="$(who -m 2>/dev/null | sed -n 's/.*(\(.*\))[[:space:]]*$/\1/p' | head -n1)"
+  fi
+  looks_like_ip_address "$ip" || return 1
+  printf '%s\n' "$ip"
+}
+
 configure_fail2ban() {
-  local content protected_ports
+  local content protected_ports ignoreip
   assert_managed_or_absent "$FAIL2BAN_JAIL"
   protected_ports="$SSH_PORT"
   if [ -f "$VPSGUARD_PENDING_PORT_MARKER" ] && [ "$ORIGINAL_SSH_PORT" != "$SSH_PORT" ]; then
     protected_ports="${SSH_PORT},${ORIGINAL_SSH_PORT}"
   fi
+
+  ignoreip="127.0.0.1/8 ::1"
+  if INSTALLER_IP="$(current_connection_ip)"; then
+    ignoreip="${ignoreip} ${INSTALLER_IP}"
+  else
+    INSTALLER_IP=""
+    warn "无法确定当前连接的来源 IP（SSH_CONNECTION 为空，who -m 也没有给出可用地址）；未将任何地址加入 fail2ban 白名单。"
+  fi
+
   content="# Managed by VPSGuard ${VPSGUARD_VERSION}
 [sshd]
 enabled = true
@@ -1584,6 +1621,7 @@ backend = systemd
 maxretry = 5
 findtime = 10m
 bantime = 1h
+ignoreip = ${ignoreip}
 "
   atomic_write "$FAIL2BAN_JAIL" 644 "$content"
   local jail_changed="$ATOMIC_WRITE_CHANGED"
@@ -2245,6 +2283,9 @@ print_final_summary() {
   fi
   if [ -f "${VPSGUARD_RUN_ROOT}/reboot-required" ]; then
     warn "系统更新需要重启才能完全生效，确认新管理员登录正常后再手动重启。"
+  fi
+  if [ -n "$INSTALLER_IP" ]; then
+    printf '已将当前连接 IP %s 加入 fail2ban 白名单；如果你的出口 IP 会变化（例如使用代理），换 IP 后多次登录失败仍可能被封禁。\n' "$INSTALLER_IP"
   fi
 }
 
