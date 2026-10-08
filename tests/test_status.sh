@@ -48,9 +48,20 @@ assert_equal inactive \
   "inactive systemd socket does not report configured port as a listener"
 
 
-listener_22='tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=1,fd=3))'
-listener_2222='tcp LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* users:(("sshd",pid=1,fd=3))'
+listener_22='LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=1,fd=3))'
+listener_2222='LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* users:(("sshd",pid=1,fd=3))'
 listeners_both="${listener_22}"$'\n'"${listener_2222}"
+
+# Real `ss -ltnpH` output (TCP only - no Netid column) and real `ss -ltnupH`
+# output (TCP+UDP - has a Netid column) captured on an AWS Ubuntu 24.04
+# instance, both on port 22. ssh_listener_present must recognize the
+# listener in either format without assuming a fixed column index.
+no_netid_listener_22='LISTEN 0      4096                0.0.0.0:22    0.0.0.0:*  users:(("sshd",pid=24473,fd=3),("systemd",pid=1,fd=143))
+LISTEN 0      4096                   [::]:22       [::]:*  users:(("sshd",pid=24473,fd=4),("systemd",pid=1,fd=144))'
+assert_success ssh_listener_present 22 "$no_netid_listener_22"
+
+with_netid_listener_22='tcp LISTEN 0      4096                0.0.0.0:22    0.0.0.0:*  users:(("sshd",pid=24473,fd=3),("systemd",pid=1,fd=143))'
+assert_success ssh_listener_present 22 "$with_netid_listener_22"
 
 assert_equal not-started \
   "$(port_finalization_state 2222 22 "$listener_22" missing missing)" \

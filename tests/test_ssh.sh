@@ -32,11 +32,24 @@ passwordauthentication yes
 pubkeyauthentication yes'
 assert_failure verify_effective_sshd_config
 
-listener='tcp LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* users:(("sshd",pid=123,fd=3))'
+listener='LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* users:(("sshd",pid=123,fd=3))'
 printf '%s\n' "$listener" | ssh_listener_present_from_text 2222 || fail "target listener was not recognized"
 if printf '%s\n' "$listener" | ssh_listener_present_from_text 22; then
   fail "listener check used a substring port match"
 fi
+
+# Real `ss -ltnpH` output (TCP only - no Netid column) and real `ss -ltnupH`
+# output (TCP+UDP - has a Netid column) captured on an AWS Ubuntu 24.04
+# instance, both on port 22. ssh_listener_present_from_text must recognize
+# the listener in either format without assuming a fixed column index.
+no_netid_listener='LISTEN 0      4096                0.0.0.0:22    0.0.0.0:*  users:(("sshd",pid=24473,fd=3),("systemd",pid=1,fd=143))
+LISTEN 0      4096                   [::]:22       [::]:*  users:(("sshd",pid=24473,fd=4),("systemd",pid=1,fd=144))'
+printf '%s\n' "$no_netid_listener" | ssh_listener_present_from_text 22 \
+  || fail "target listener was not recognized in real ss -ltnpH (no Netid column) output"
+
+with_netid_listener='tcp LISTEN 0      4096                0.0.0.0:22    0.0.0.0:*  users:(("sshd",pid=24473,fd=3),("systemd",pid=1,fd=143))'
+printf '%s\n' "$with_netid_listener" | ssh_listener_present_from_text 22 \
+  || fail "target listener was not recognized in real ss -ltnupH (with Netid column) output"
 
 write_vpsguard_sshd_config true
 assert_file_contains "$VPSGUARD_SSHD_CONFIG" 'Port 2222'

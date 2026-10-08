@@ -310,11 +310,18 @@ systemd_socket_listeners_for_state_from_text() {
 ssh_listener_present() {
   local port="$1"
   local output="$2"
-  # ss -ltnpH's first column is the Netid (tcp/udp), so the state is $2 and
-  # the local address:port is $5 - not $1/$4.
+  # ss only prints a Netid column when the query spans multiple socket
+  # families (e.g. -ltnupH, -t and -u together); a single-family query like
+  # -ltnpH does not, which shifts every later column left by one. Find the
+  # State column (LISTEN) instead of assuming a fixed index, and read the
+  # local address:port three columns after it (State, Recv-Q, Send-Q,
+  # Local-Address:Port).
   printf '%s\n' "$output" | awk -v wanted="$port" '
-    $2 == "LISTEN" {
-      address=$5
+    {
+      state_col = 0
+      for (i = 1; i <= NF; i++) { if ($i == "LISTEN") { state_col = i; break } }
+      if (state_col == 0) next
+      address = $(state_col + 3)
       sub(/^.*:/, "", address)
       if (address == wanted && ($0 ~ /sshd/ || $0 ~ /systemd/)) found=1
     }
