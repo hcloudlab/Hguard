@@ -849,6 +849,7 @@ ensure_sudo_password() {
     [ -t 0 ] || error "Administrator ${NEW_USER} has no usable password. Set one with 'passwd ${NEW_USER}' from a trusted console, then rerun VPSGuard."
   fi
   warn "VPSGuard uses standard password-authenticated sudo. Set a strong password for ${NEW_USER}; it is not used for SSH login."
+  warn "部分云镜像会强制检查密码强度，建议使用随机生成的强密码（例如 openssl rand -base64 18），避免因密码过弱被拒绝。"
   if ! passwd "$NEW_USER"; then
     warn "Could not set the sudo password for ${NEW_USER}."
     return 1

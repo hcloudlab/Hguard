@@ -176,7 +176,9 @@ printf 'User secureadmin may run the following commands:\n    (ALL : ALL) ALL\n'
 printf 'User secureadmin may run the following commands:\n    (root) /usr/bin/systemctl\n' | assert_failure sudo_policy_has_full_admin_from_text
 
 SUDO_MODE="password"
-configure_sudo
+sudo_setup_output_file="$temporary_root/configure-sudo-output.log"
+configure_sudo > "$sudo_setup_output_file" 2>&1
+assert_file_contains "$sudo_setup_output_file" '部分云镜像会强制检查密码强度，建议使用随机生成的强密码'
 assert_equal 1 "$passwd_calls" "password mode invokes passwd for a locked account"
 assert_equal P "$mock_password_state" "password mode requires passwd state P"
 assert_equal 1 "$sudo_v_calls" "password mode performs interactive sudo validation"
