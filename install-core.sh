@@ -59,6 +59,25 @@ HGUARD_APT_HOOK_SCRIPT="${HGUARD_APT_HOOK_SCRIPT:-${HGUARD_LIB_DIR}/apt-hook.sh}
 # hardcoded for the same reason.
 HGUARD_RAW_BASE_URL="https://raw.githubusercontent.com/hcloudlab/Hguard"
 
+# VPSGuard-era (pre-rename) paths, only ever read/removed by
+# migrate_from_vpsguard() and never written to - current code always
+# writes the HGUARD_* equivalents above.
+VPSGUARD_LEGACY_STATE_DIR="${VPSGUARD_LEGACY_STATE_DIR:-${HGUARD_ETC_ROOT}/vpsguard}"
+VPSGUARD_LEGACY_SSHD_CONFIG="${SSHD_CONFIG_DIR}/00-vpsguard.conf"
+VPSGUARD_LEGACY_SSH_SOCKET_OVERRIDE="${SYSTEMD_SYSTEM_DIR}/ssh.socket.d/00-vpsguard.conf"
+VPSGUARD_LEGACY_FAIL2BAN_JAIL="${HGUARD_ETC_ROOT}/fail2ban/jail.d/vpsguard-sshd.local"
+VPSGUARD_LEGACY_BBR_SYSCTL_FILE="${HGUARD_ETC_ROOT}/sysctl.d/99-vpsguard-bbr.conf"
+VPSGUARD_LEGACY_BBR_MODULES_FILE="${HGUARD_ETC_ROOT}/modules-load.d/vpsguard-bbr.conf"
+VPSGUARD_LEGACY_CONNTRACK_SYSCTL_FILE="${HGUARD_ETC_ROOT}/sysctl.d/99-vpsguard-conntrack.conf"
+VPSGUARD_LEGACY_CONNTRACK_MODPROBE_FILE="${HGUARD_ETC_ROOT}/modprobe.d/vpsguard-nf-conntrack.conf"
+VPSGUARD_LEGACY_CONNTRACK_MODULES_FILE="${HGUARD_ETC_ROOT}/modules-load.d/vpsguard-conntrack.conf"
+VPSGUARD_LEGACY_CONNTRACK_HELPER_FILE="${VPSGUARD_LEGACY_STATE_DIR}/apply-conntrack-profile.sh"
+VPSGUARD_LEGACY_CONNTRACK_SERVICE_NAME="vpsguard-conntrack.service"
+VPSGUARD_LEGACY_CONNTRACK_SERVICE_FILE="${SYSTEMD_SYSTEM_DIR}/${VPSGUARD_LEGACY_CONNTRACK_SERVICE_NAME}"
+VPSGUARD_LEGACY_SSHD_INCLUDE_BEGIN="# BEGIN VPSGuard managed include"
+VPSGUARD_LEGACY_SSHD_INCLUDE_END="# END VPSGuard managed include"
+VPSGUARD_MIGRATED_MARKER_FILE="${VPSGUARD_LEGACY_STATE_DIR}/MIGRATED-TO-HGUARD"
+
 OPTIMIZE_CONNTRACK="false"
 REQUESTED_NEW_USER="${NEW_USER:-}"
 REQUESTED_SSH_PORT="${SSH_PORT:-}"
@@ -2514,6 +2533,241 @@ remove_legacy_phase_markers() {
   rm -f "${HGUARD_STATE_DIR}/.ssh_done" "${HGUARD_STATE_DIR}/.sudo_done" "${HGUARD_STATE_DIR}/.ufw_done"
 }
 
+# ---- VPSGuard -> Hguard migration (2.2) ----
+#
+# Trigger: a VPSGuard install exists (its state dir is present) and no
+# Hguard state dir exists yet. Runs once, early in main() - after
+# require_root/check_ubuntu_lts, before resolve_managed_user and anything
+# else that reads HGUARD_CONFIG_FILE - so the rest of main() finds a
+# config already in place and proceeds exactly like an ordinary rerun.
+#
+# Every subsystem below follows the same shape: write the new file(s),
+# validate with the real tool for that subsystem (sshd -t, fail2ban-client
+# -t, visudo -c, sysctl -p, systemctl is-enabled), only then remove the
+# old file(s), and validate again. Nothing old is removed before its
+# replacement is positively confirmed working; a failure at any point
+# leaves the old (still-governing) configuration in place and errors out
+# rather than guessing at a recovery.
+migrate_from_vpsguard_needed() {
+  [ -d "$VPSGUARD_LEGACY_STATE_DIR" ] && [ ! -d "$HGUARD_STATE_DIR" ]
+}
+
+migrate_vpsguard_copy_state_files() {
+  local src dest name
+
+  ensure_directory "$HGUARD_STATE_DIR" 700
+  for name in config.env state.env managed-rules .installed .pending-port-finalization \
+    .ssh_done .sudo_done .ufw_done; do
+    src="${VPSGUARD_LEGACY_STATE_DIR}/${name}"
+    [ -f "$src" ] || continue
+    dest="${HGUARD_STATE_DIR}/${name}"
+    cp -p "$src" "$dest" || error "Migration: could not copy ${src} to ${dest}."
+    chmod 600 "$dest"
+  done
+}
+
+# Mirrors ensure_hguard_sshd_include_first's removal half, but for the
+# legacy markers: strips the VPSGuard include block out of SSHD_CONFIG,
+# leaving everything else (including the already-inserted Hguard block)
+# untouched.
+migrate_remove_vpsguard_sshd_include() {
+  local begin_count end_count content mode temporary_file
+
+  if ! begin_count="$(grep -Fxc "$VPSGUARD_LEGACY_SSHD_INCLUDE_BEGIN" "$SSHD_CONFIG")"; then begin_count=0; fi
+  if ! end_count="$(grep -Fxc "$VPSGUARD_LEGACY_SSHD_INCLUDE_END" "$SSHD_CONFIG")"; then end_count=0; fi
+  [ "$begin_count" -eq 0 ] && [ "$end_count" -eq 0 ] && return 0
+  [ "$begin_count" -eq 1 ] && [ "$end_count" -eq 1 ] || return 1
+
+  content="$(awk -v begin="$VPSGUARD_LEGACY_SSHD_INCLUDE_BEGIN" -v end="$VPSGUARD_LEGACY_SSHD_INCLUDE_END" '
+    $0 == begin {inside=1; next}
+    $0 == end {inside=0; next}
+    !inside {print}
+  ' "$SSHD_CONFIG")"
+  if ! mode="$(stat -c '%a' "$SSHD_CONFIG" 2>/dev/null)"; then mode=644; fi
+  temporary_file="$(mktemp "${SSHD_CONFIG}.vpsguard-migrate.XXXXXX")" || return 1
+  printf '%s\n' "$content" > "$temporary_file"
+  chmod "$mode" "$temporary_file"
+  mv -f "$temporary_file" "$SSHD_CONFIG"
+}
+
+migrate_vpsguard_sshd() {
+  local ssh_port original_port keep_old_port backup
+
+  [ -f "$SSHD_CONFIG" ] || return 0
+  grep -Fxq "$VPSGUARD_LEGACY_SSHD_INCLUDE_BEGIN" "$SSHD_CONFIG" 2>/dev/null || return 0
+
+  if ! ssh_port="$(read_env_value "$HGUARD_CONFIG_FILE" SSH_PORT 2>/dev/null)" || [ -z "$ssh_port" ]; then
+    warn "Migration: could not determine the configured SSH port from the migrated config; sshd migration skipped, the VPSGuard config is preserved."
+    return 1
+  fi
+  if ! original_port="$(read_env_value "$HGUARD_CONFIG_FILE" ORIGINAL_SSH_PORT 2>/dev/null)" || [ -z "$original_port" ]; then
+    original_port="$ssh_port"
+  fi
+  SSH_PORT="$ssh_port"
+  ORIGINAL_SSH_PORT="$original_port"
+  keep_old_port="false"
+  [ -f "$HGUARD_PENDING_PORT_MARKER" ] && [ "$original_port" != "$ssh_port" ] && keep_old_port="true"
+
+  backup="$(mktemp "${SSHD_CONFIG}.vpsguard-migrate.XXXXXX")" || return 1
+  cp -p "$SSHD_CONFIG" "$backup" || { rm -f "$backup"; return 1; }
+
+  if ! write_hguard_sshd_config "$keep_old_port" || ! ensure_hguard_sshd_include_first; then
+    rm -f "$HGUARD_SSHD_CONFIG"
+    mv -f "$backup" "$SSHD_CONFIG"
+    warn "Migration: could not write the new sshd drop-in/include; the VPSGuard config is preserved."
+    return 1
+  fi
+
+  if ! sshd -t; then
+    rm -f "$HGUARD_SSHD_CONFIG"
+    mv -f "$backup" "$SSHD_CONFIG"
+    warn "Migration: new sshd config failed validation (with the old config still also present); the VPSGuard config is preserved."
+    return 1
+  fi
+
+  # Both the old and new include blocks/drop-ins are present and sshd -t
+  # already passed with both. Remove only the old one, then validate again
+  # before reloading - reload never runs against an unvalidated config.
+  if ! migrate_remove_vpsguard_sshd_include; then
+    warn "Migration: left the old VPSGuard sshd include in place (could not safely remove it); the new Hguard config is also active. Harmless - at most one orphan Include line."
+  else
+    rm -f "$VPSGUARD_LEGACY_SSHD_CONFIG"
+    if ! sshd -t; then
+      error "Migration: sshd config failed validation after removing the old VPSGuard include. Keep this session open; inspect ${SSHD_CONFIG} manually."
+    fi
+  fi
+
+  if [ -f "$VPSGUARD_LEGACY_SSH_SOCKET_OVERRIDE" ]; then
+    write_hguard_ssh_socket_override "$keep_old_port"
+    rm -f "$VPSGUARD_LEGACY_SSH_SOCKET_OVERRIDE"
+  fi
+
+  apply_ssh_runtime || error "Migration: could not reload SSH after migrating its configuration. Keep this session open and investigate."
+  verify_ssh_listener "$SSH_PORT" || error "Migration: SSH did not come back up on the configured port after reload. Keep this session open."
+  rm -f "$backup"
+}
+
+migrate_vpsguard_fail2ban() {
+  [ -f "$VPSGUARD_LEGACY_FAIL2BAN_JAIL" ] || return 0
+  cp -p "$VPSGUARD_LEGACY_FAIL2BAN_JAIL" "$FAIL2BAN_JAIL"
+  if ! fail2ban-client -t >/dev/null 2>&1; then
+    rm -f "$FAIL2BAN_JAIL"
+    warn "Migration: new fail2ban jail failed validation; the VPSGuard jail is preserved."
+    return 1
+  fi
+  rm -f "$VPSGUARD_LEGACY_FAIL2BAN_JAIL"
+  if ! fail2ban-client -t >/dev/null 2>&1; then
+    error "Migration: fail2ban configuration failed validation after removing the old VPSGuard jail. Inspect ${HGUARD_ETC_ROOT}/fail2ban manually."
+  fi
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet fail2ban.service; then
+    systemctl reload fail2ban.service || systemctl restart fail2ban.service
+  fi
+}
+
+migrate_vpsguard_sudoers() {
+  local new_user legacy_file new_file legacy_legacy_file
+
+  if ! new_user="$(read_env_value "$HGUARD_CONFIG_FILE" NEW_USER 2>/dev/null)" || [ -z "$new_user" ]; then
+    return 0
+  fi
+  legacy_file="${SUDOERS_DIR}/vpsguard-${new_user}"
+  legacy_legacy_file="${SUDOERS_DIR}/90-vpsguard-${new_user}"
+  new_file="$(sudoers_file_for_user)"
+
+  if [ -f "$legacy_file" ]; then
+    cp -p "$legacy_file" "$new_file"
+    chmod 440 "$new_file"
+    if ! visudo -cf "$new_file" >/dev/null 2>&1; then
+      rm -f "$new_file"
+      warn "Migration: new sudoers file failed validation; the VPSGuard sudoers file is preserved."
+      return 1
+    fi
+    rm -f "$legacy_file"
+    if ! visudo -c >/dev/null 2>&1; then
+      error "Migration: global sudoers validation failed after removing the old VPSGuard sudoers file. Inspect ${SUDOERS_DIR} manually."
+    fi
+  fi
+  # 90-vpsguard-<user> is already two generations obsolete by the time of
+  # this migration; just retire it once the current generation (above, if
+  # any) has been safely handled - no new file corresponds to it.
+  if [ -f "$legacy_legacy_file" ] && managed_file_is_owned "$legacy_legacy_file"; then
+    rm -f "$legacy_legacy_file"
+  fi
+}
+
+migrate_vpsguard_bbr_and_conntrack_files() {
+  local pairs old new target_hash
+
+  pairs="${VPSGUARD_LEGACY_BBR_SYSCTL_FILE}:${BBR_SYSCTL_FILE}
+${VPSGUARD_LEGACY_BBR_MODULES_FILE}:${BBR_MODULES_FILE}
+${VPSGUARD_LEGACY_CONNTRACK_MODULES_FILE}:${CONNTRACK_MODULES_FILE}"
+  while IFS=: read -r old new; do
+    [ -n "$old" ] || continue
+    [ -f "$old" ] || continue
+    cp -p "$old" "$new"
+    rm -f "$old"
+  done <<< "$pairs"
+
+  if [ -f "$VPSGUARD_LEGACY_CONNTRACK_SYSCTL_FILE" ]; then
+    cp -p "$VPSGUARD_LEGACY_CONNTRACK_SYSCTL_FILE" "$CONNTRACK_SYSCTL_FILE"
+    if ! sysctl -q -p "$CONNTRACK_SYSCTL_FILE" >/dev/null 2>&1; then
+      warn "Migration: could not apply the migrated conntrack sysctl file at runtime; it is still installed for next boot."
+    fi
+    rm -f "$VPSGUARD_LEGACY_CONNTRACK_SYSCTL_FILE"
+  fi
+
+  if [ -f "$VPSGUARD_LEGACY_CONNTRACK_MODPROBE_FILE" ]; then
+    target_hash="$(awk -F= '/hashsize=/{print $2; exit}' "$VPSGUARD_LEGACY_CONNTRACK_MODPROBE_FILE" 2>/dev/null)"
+    cp -p "$VPSGUARD_LEGACY_CONNTRACK_MODPROBE_FILE" "$CONNTRACK_MODPROBE_FILE"
+    rm -f "$VPSGUARD_LEGACY_CONNTRACK_MODPROBE_FILE"
+    if [ -n "$target_hash" ] && [ -w "$(conntrack_hashsize_file)" ]; then
+      printf '%s\n' "$target_hash" > "$(conntrack_hashsize_file)" 2>/dev/null || true
+    fi
+  fi
+
+  if [ -f "$VPSGUARD_LEGACY_CONNTRACK_HELPER_FILE" ]; then
+    cp -p "$VPSGUARD_LEGACY_CONNTRACK_HELPER_FILE" "$CONNTRACK_HELPER_FILE"
+    chmod 755 "$CONNTRACK_HELPER_FILE"
+    rm -f "$VPSGUARD_LEGACY_CONNTRACK_HELPER_FILE"
+  fi
+}
+
+migrate_vpsguard_conntrack_service() {
+  [ -f "$VPSGUARD_LEGACY_CONNTRACK_SERVICE_FILE" ] || return 0
+  command -v systemctl >/dev/null 2>&1 || return 0
+
+  cp -p "$VPSGUARD_LEGACY_CONNTRACK_SERVICE_FILE" "$CONNTRACK_SERVICE_FILE"
+  systemctl daemon-reload
+  if ! systemctl enable "$CONNTRACK_SERVICE_NAME" >/dev/null 2>&1; then
+    rm -f "$CONNTRACK_SERVICE_FILE"
+    systemctl daemon-reload
+    warn "Migration: could not enable ${CONNTRACK_SERVICE_NAME}; the old VPSGuard unit is left stopped/disabled below regardless, run --optimize-conntrack to redeploy."
+  fi
+  # Stop/disable the old unit only now that the new one is confirmed
+  # enabled (or we gave up on it above) - never disable the old one first.
+  systemctl stop "$VPSGUARD_LEGACY_CONNTRACK_SERVICE_NAME" >/dev/null 2>&1 || true
+  systemctl disable "$VPSGUARD_LEGACY_CONNTRACK_SERVICE_NAME" >/dev/null 2>&1 || true
+  rm -f "$VPSGUARD_LEGACY_CONNTRACK_SERVICE_FILE"
+  systemctl daemon-reload
+}
+
+migrate_from_vpsguard() {
+  migrate_from_vpsguard_needed || return 0
+
+  info "检测到 VPSGuard 安装，正在迁移到 Hguard..."
+  migrate_vpsguard_copy_state_files
+  migrate_vpsguard_sshd
+  migrate_vpsguard_fail2ban
+  migrate_vpsguard_sudoers
+  migrate_vpsguard_bbr_and_conntrack_files
+  migrate_vpsguard_conntrack_service
+
+  atomic_write "$VPSGUARD_MIGRATED_MARKER_FILE" 600 "Migrated to Hguard ${HGUARD_VERSION} at $(date -u '+%Y-%m-%dT%H:%M:%SZ').
+This directory is left in place as a backup only and is no longer used by Hguard.
+"
+  info "VPSGuard 迁移完成；/etc/vpsguard 已保留作为备份，不再被使用。"
+}
+
 main() {
   parse_args "$@"
   require_root
@@ -2524,6 +2778,7 @@ main() {
     optimize_conntrack
     return 0
   fi
+  migrate_from_vpsguard
   ensure_directory "$HGUARD_STATE_DIR" 700
   prepare_sshd_runtime_directory
   resolve_managed_user
