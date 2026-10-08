@@ -20,7 +20,6 @@ resolve_sudo_mode() { SUDO_MODE=password; }
 resolve_ssh_ports() { :; }
 check_root_ssh_key() { :; }
 write_config_env() { :; }
-record_preinstall_state() { :; }
 upgrade_system() { rm -rf "$VPSGUARD_RUN_ROOT/sshd"; }
 fail2ban_systemd_backend_available() { :; }
 ensure_managed_user() { :; }
@@ -40,7 +39,8 @@ run_final_acceptance() { :; }
 remove_legacy_phase_markers() { :; }
 print_final_summary() { :; }
 
-main
+main_output_file="$temporary_root/main-output.log"
+main > "$main_output_file" 2>&1
 assert_equal true "$runtime_directory_seen" "post-upgrade SSH runtime directory"
 runtime_directory_mode="$(stat -c '%a' "$VPSGUARD_RUN_ROOT/sshd" 2>/dev/null || stat -f '%Lp' "$VPSGUARD_RUN_ROOT/sshd")"
 assert_equal 755 "$runtime_directory_mode" "SSH runtime directory mode"
@@ -54,3 +54,16 @@ assert_equal 755 "$runtime_directory_mode" "SSH runtime directory mode"
 [ -e "$CONNTRACK_SERVICE_FILE" ] || fail "ordinary install did not write conntrack systemd unit"
 
 pass "OpenSSH upgrade runtime-directory recreation"
+
+# A single main() run must report the conntrack check exactly once (it used
+# to run twice - once inside optimize_conntrack, once again right after in
+# main) and must never claim the pre-install snapshot was "already
+# recorded" on a first install (record_preinstall_state used to run once
+# explicitly in main and a second time inside optimize_conntrack).
+conntrack_line_count="$(grep -c 'Conntrack usage\|Conntrack health' "$main_output_file" || true)"
+assert_equal 1 "$conntrack_line_count" "the conntrack install check is reported exactly once per install"
+if grep -q 'already recorded' "$main_output_file"; then
+  fail "a first install must not claim the pre-install state was already recorded"
+fi
+
+pass "main() reports the conntrack check once and never claims a first install's state was already recorded"

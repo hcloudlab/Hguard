@@ -2070,9 +2070,6 @@ optimize_conntrack() {
   local target_hash
   local foreign_sources foreign_count ram_mb
 
-  ensure_directory "$VPSGUARD_STATE_DIR" 700
-  record_preinstall_state
-
   if ! current_hash="$(conntrack_read_hashsize 2>/dev/null)"; then current_hash=""; fi
   ram_mb="$(system_ram_mb)"
 
@@ -2227,6 +2224,8 @@ main() {
   require_root
   check_ubuntu_lts
   if [ "$OPTIMIZE_CONNTRACK" = "true" ]; then
+    ensure_directory "$VPSGUARD_STATE_DIR" 700
+    record_preinstall_state
     optimize_conntrack
     return 0
   fi
@@ -2260,7 +2259,6 @@ main() {
   configure_fail2ban
   enable_bbr
   optimize_conntrack
-  print_conntrack_install_check
 
   run_final_acceptance || error "Final acceptance failed. The installed marker was not written; keep the current SSH session open."
   remove_legacy_phase_markers
