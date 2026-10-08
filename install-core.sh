@@ -2128,9 +2128,31 @@ run_final_acceptance() {
 "
 }
 
+# RFC 1918 (10/8, 172.16/12, 192.168/16) plus RFC 6598 (100.64/10, the
+# carrier-grade NAT range clouds like AWS/GCP use for the VPC-internal
+# address handed back by `hostname -I`). No external network call is made
+# to learn the public IP; we only decide whether to hide the private one.
+is_private_ipv4() {
+  local ip="$1" a b
+  [[ "$ip" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || return 1
+  a="${BASH_REMATCH[1]}"
+  b="${BASH_REMATCH[2]}"
+  case "$a" in
+    10) return 0 ;;
+    172) [ "$b" -ge 16 ] && [ "$b" -le 31 ] ;;
+    192) [ "$b" -eq 168 ] ;;
+    100) [ "$b" -ge 64 ] && [ "$b" -le 127 ] ;;
+    *) return 1 ;;
+  esac
+}
+
 print_final_summary() {
-  local server_ip
-  server_ip="$(hostname -I | awk '{print $1}')"
+  local detected_ip display_ip
+  detected_ip="$(hostname -I | awk '{print $1}')"
+  display_ip="$detected_ip"
+  if [ -n "$detected_ip" ] && is_private_ipv4 "$detected_ip"; then
+    display_ip=""
+  fi
 
   printf '\n%bVPSGuard %s acceptance completed%b\n' "$BOLD" "$VPSGUARD_VERSION" "$NC"
   printf 'Install status: %s\n' "$INSTALL_STATUS"
@@ -2139,7 +2161,10 @@ print_final_summary() {
   printf 'Target SSH port: %s\n' "$SSH_PORT"
   printf 'SSH runtime mode: %s\n' "$SSH_RUNTIME_MODE"
   printf 'BBR status: %s\n' "$BBR_STATUS"
-  printf 'Test from a second terminal: ssh -p %s %s@%s\n' "$SSH_PORT" "$NEW_USER" "${server_ip:-SERVER_IP}"
+  printf 'Test from a second terminal: ssh -p %s %s@%s\n' "$SSH_PORT" "$NEW_USER" "${display_ip:-SERVER_IP}"
+  if [ -n "$detected_ip" ] && [ -z "$display_ip" ]; then
+    printf '%b检测到的是云内网地址（%s），请替换上面的 SERVER_IP 为服务商控制台中的公网 IP。%b\n' "$YELLOW" "$detected_ip" "$NC"
+  fi
   printf '%bDo not close the current session until remote login and sudo are verified.%b\n' "$YELLOW" "$NC"
   if [ "$INSTALL_STATUS" = "pending-port-finalization" ]; then
     warn "Old SSH port ${ORIGINAL_SSH_PORT} is intentionally retained. Rerun VPSGuard after remote validation to finalize."

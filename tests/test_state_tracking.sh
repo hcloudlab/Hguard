@@ -56,3 +56,33 @@ summary_output="$(print_final_summary)"
 assert_file_contains /dev/stdin "203.0.113.5" <<<"$summary_output"
 
 pass "print_final_summary reports the server IP from hostname -I only, no network call"
+
+# is_private_ipv4: RFC 1918 + RFC 6598 (carrier-grade NAT, used by AWS/GCP
+# VPCs) ranges and their boundaries.
+assert_success is_private_ipv4 10.0.0.1
+assert_success is_private_ipv4 172.16.0.1
+assert_success is_private_ipv4 172.31.255.254
+assert_success is_private_ipv4 192.168.1.1
+assert_success is_private_ipv4 100.64.0.1
+assert_success is_private_ipv4 100.127.255.255
+assert_failure is_private_ipv4 172.15.255.255
+assert_failure is_private_ipv4 172.32.0.1
+assert_failure is_private_ipv4 100.63.255.255
+assert_failure is_private_ipv4 100.128.0.1
+assert_failure is_private_ipv4 203.0.113.5
+assert_failure is_private_ipv4 8.8.8.8
+
+pass "is_private_ipv4 covers RFC 1918 and RFC 6598 ranges and their boundaries"
+
+# A cloud VPC's private address (e.g. AWS's 172.31.x.x) must be hidden
+# behind the SERVER_IP placeholder, with a hint to use the console's public
+# IP instead - this is the exact AWS scenario found in testing.
+hostname() { [ "$1" = "-I" ] && printf '172.31.5.20 fe80::1\n'; }
+summary_output="$(print_final_summary)"
+assert_file_contains /dev/stdin 'ssh -p 22 admin@SERVER_IP' <<<"$summary_output"
+assert_file_contains /dev/stdin '172.31.5.20' <<<"$summary_output"
+if printf '%s\n' "$summary_output" | grep -Fq 'admin@172.31.5.20'; then
+  fail "a private VPC IP must not be printed as the ssh target"
+fi
+
+pass "print_final_summary hides a private VPC IP behind SERVER_IP with a console hint"
