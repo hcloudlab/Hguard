@@ -102,6 +102,12 @@ ensure_directory() {
   local mode="${2:-700}"
 
   mkdir -p "$path"
+  # Re-check for a symlink immediately before chmod/chown, not just before
+  # mkdir -p: mkdir -p is a no-op if the path already exists in any form,
+  # and chmod/chown follow a symlink by default, so a path swapped to a
+  # symlink between an earlier check and here would make these root-owned
+  # operations run against an attacker-chosen target instead.
+  [ ! -L "$path" ] || error "${path} is a symlink; refusing to follow it."
   chmod "$mode" "$path"
   if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
     chown root:root "$path"
@@ -727,6 +733,13 @@ ensure_admin_ssh_directory() {
   local ssh_directory="$1"
 
   mkdir -p "$ssh_directory"
+  # Re-check for a symlink immediately before chown/chmod, not just in the
+  # caller before this function runs: mkdir -p is a no-op if the path
+  # already exists in any form, and chown/chmod follow a symlink by
+  # default, so a path swapped to a symlink in the window since the
+  # caller's own check would make these operations run - as root - against
+  # whatever attacker-chosen target the symlink points to.
+  [ ! -L "$ssh_directory" ] || error "${ssh_directory} is a symlink; refusing to follow it."
   chown "${NEW_USER}:${NEW_USER}" "$ssh_directory"
   chmod 700 "$ssh_directory"
 }
