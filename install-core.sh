@@ -2094,23 +2094,27 @@ apply_conntrack_runtime_values() {
   local target_hashsize="$1"
   local files_changed="${2:-true}"
 
+  # The gate: when the managed files didn't change and the runtime profile
+  # is already active (both folded into files_changed by the caller),
+  # there is nothing to (re)apply - skip entirely instead of rewriting the
+  # same hashsize value and logging "Updated"/"Applied" on every rerun.
+  # The helper script covers max/timeouts; this is the only place that
+  # applies the hashsize floor at runtime (hashsize has no sysctl key).
+  [ "$files_changed" = "true" ] || return 0
+
   if [ "$VPSGUARD_TEST_MODE" = "1" ]; then
-    if [ "$files_changed" = "true" ]; then
-      VPSGUARD_PROC_SYS_ROOT="$VPSGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE" || true
-    fi
+    VPSGUARD_PROC_SYS_ROOT="$VPSGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE" || true
     [ ! -e "$(conntrack_hashsize_file)" ] || printf '%s\n' "$target_hashsize" > "$(conntrack_hashsize_file)" 2>/dev/null || true
     return 0
   fi
 
-  if [ "$files_changed" = "true" ]; then
-    if command -v modprobe >/dev/null 2>&1; then
-      if ! modprobe nf_conntrack >/dev/null 2>&1; then
-        warn "modprobe nf_conntrack failed; persistent module-load config was written for reboot."
-      fi
+  if command -v modprobe >/dev/null 2>&1; then
+    if ! modprobe nf_conntrack >/dev/null 2>&1; then
+      warn "modprobe nf_conntrack failed; persistent module-load config was written for reboot."
     fi
-    if ! bash "$CONNTRACK_HELPER_FILE"; then
-      warn "Could not apply the conntrack runtime floor helper; persistent systemd unit was written for reboot."
-    fi
+  fi
+  if ! bash "$CONNTRACK_HELPER_FILE"; then
+    warn "Could not apply the conntrack runtime floor helper; persistent systemd unit was written for reboot."
   fi
   if ! sysctl -q -p "$CONNTRACK_SYSCTL_FILE" >/dev/null 2>&1; then
     warn "Could not apply conntrack timeout sysctl values at runtime; persistent config was written for reboot."
@@ -2168,8 +2172,12 @@ optimize_conntrack() {
     conntrack_files_changed="true"
   fi
   apply_conntrack_runtime_values "$target_hash" "$conntrack_files_changed"
-  info "Applied VPSGuard conntrack profile: max floor=65536, hashsize floor=${target_hash}, syn_sent=$(conntrack_profile_syn_sent_target), syn_recv=$(conntrack_profile_syn_recv_target), time_wait=$(conntrack_profile_time_wait_target), RAM=${ram_mb}MB."
-  warn "hashsize persistence depends on nf_conntrack reload/reboot; verify after reboot with status.sh."
+  if [ "$conntrack_files_changed" = "true" ]; then
+    info "Applied VPSGuard conntrack profile: max floor=65536, hashsize floor=${target_hash}, syn_sent=$(conntrack_profile_syn_sent_target), syn_recv=$(conntrack_profile_syn_recv_target), time_wait=$(conntrack_profile_time_wait_target), RAM=${ram_mb}MB."
+    warn "hashsize persistence depends on nf_conntrack reload/reboot; verify after reboot with status.sh."
+  else
+    info "VPSGuard conntrack profile already active; no changes needed (max floor=65536, hashsize floor=${target_hash})."
+  fi
   print_conntrack_install_check
 }
 

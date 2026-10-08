@@ -80,8 +80,19 @@ assert_equal 20 "$(cat "$(conntrack_timeout_file syn_recv)")" "runtime syn_recv 
 assert_equal 30 "$(cat "$(conntrack_timeout_file time_wait)")" "runtime time_wait timeout"
 assert_equal active "$(conntrack_runtime_profile_state)" "runtime profile active after optimization"
 first_checksum="$(cksum "$CONNTRACK_SYSCTL_FILE" "$CONNTRACK_MODPROBE_FILE" "$CONNTRACK_MODULES_FILE" "$CONNTRACK_HELPER_FILE" "$CONNTRACK_SERVICE_FILE")"
-optimize_conntrack >/dev/null
+rerun_output_file="$temporary_root/rerun-output.log"
+optimize_conntrack > "$rerun_output_file" 2>&1
 assert_equal "$first_checksum" "$(cksum "$CONNTRACK_SYSCTL_FILE" "$CONNTRACK_MODPROBE_FILE" "$CONNTRACK_MODULES_FILE" "$CONNTRACK_HELPER_FILE" "$CONNTRACK_SERVICE_FILE")" "conntrack optimization is idempotent"
+
+# A rerun with unchanged files and an already-active runtime profile must
+# not reapply anything or claim it did - real-world testing on an already-
+# optimized machine showed "Updated nf_conntrack hashsize at runtime" and
+# "Applied VPSGuard conntrack profile" on every single rerun.
+if grep -q 'Updated nf_conntrack hashsize at runtime\|Applied VPSGuard conntrack profile' "$rerun_output_file"; then
+  fail "a no-op rerun must not reapply the conntrack profile or claim it did: $(cat "$rerun_output_file")"
+fi
+
+pass "a no-op conntrack rerun neither reapplies the runtime profile nor claims it did"
 
 write_conntrack_fixture 100 131072 32768
 rm -f "$CONNTRACK_SYSCTL_FILE" "$CONNTRACK_MODPROBE_FILE" "$CONNTRACK_MODULES_FILE" "$CONNTRACK_HELPER_FILE" "$CONNTRACK_SERVICE_FILE"
