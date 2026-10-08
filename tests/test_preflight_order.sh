@@ -40,3 +40,23 @@ fi
 [ ! -e "$upgrade_marker" ] || fail "upgrade_system must not run when the root pubkey preflight fails"
 
 pass "check_root_ssh_key runs before upgrade_system and blocks it on failure"
+
+### Second scenario: root pubkey is fine, but a foreign cloud-init NOPASSWD
+### sudoers entry conflicts with the requested password sudo mode. This must
+### also be caught, and block upgrade_system, before any apt upgrade runs.
+ssh-keygen -q -t ed25519 -N '' -f "$temporary_root/root_key" </dev/null
+cp "$temporary_root/root_key.pub" "$ROOT_AUTHORIZED_KEYS"
+export SUDOERS_DIR="$temporary_root/sudoers.d"
+mkdir -p "$SUDOERS_DIR"
+printf 'admin ALL=(ALL) NOPASSWD: ALL\n' > "$SUDOERS_DIR/90-cloud-init-users"
+managed_file_is_owned() { return 1; }
+
+rm -f "$upgrade_marker"
+resolve_sudo_mode() { SUDO_MODE="password"; }
+
+if (main) 2>/dev/null; then
+  fail "main should error on a foreign NOPASSWD sudoers conflict in password mode"
+fi
+[ ! -e "$upgrade_marker" ] || fail "upgrade_system must not run when the sudo-mode preflight fails"
+
+pass "check_sudo_mode_compatibility runs before upgrade_system and blocks it on a cloud-init NOPASSWD conflict"

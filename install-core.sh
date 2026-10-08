@@ -929,6 +929,18 @@ detect_foreign_nopasswd_sudoers() {
   return 1
 }
 
+# Run as a preflight, before upgrade_system: a cloud-init NOPASSWD sudoers
+# conflict with password mode is cheap to detect from SUDOERS_DIR content
+# alone and should fail fast, not after a multi-minute apt upgrade already ran.
+check_sudo_mode_compatibility() {
+  local foreign_nopasswd
+
+  [ "$SUDO_MODE" = "password" ] || return 0
+  if foreign_nopasswd="$(detect_foreign_nopasswd_sudoers)"; then
+    error "检测到 ${foreign_nopasswd} 已授予 ${NEW_USER} 免密码 sudo（通常来自 cloud-init），与 password 模式冲突。请手动检查该文件并决定是否删除或修改后重试；VPSGuard 不会自动修改它。"
+  fi
+}
+
 configure_password_sudo() {
   local sudoers_file legacy_file backup="" legacy_backup=""
   local foreign_nopasswd
@@ -2152,6 +2164,7 @@ main() {
   resolve_sudo_mode
   resolve_ssh_ports
   check_root_ssh_key
+  check_sudo_mode_compatibility
   INSTALL_STATUS="failed"
   # Until the requested sudo transition is fully verified, keep the last
   # effective mode in persistent state so failed reruns report truthfully.
