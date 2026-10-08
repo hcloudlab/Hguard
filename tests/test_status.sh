@@ -6,27 +6,27 @@ set -euo pipefail
 
 temporary_root="$(mktemp -d)"
 trap 'rm -rf "$temporary_root"' EXIT
-export VPSGUARD_TEST_MODE=1
-export VPSGUARD_PROC_ROOT="$temporary_root/proc"
-export VPSGUARD_PROC_SYS_ROOT="$temporary_root/proc/sys"
-export VPSGUARD_SYS_MODULE_ROOT="$temporary_root/sys/module"
-export VPSGUARD_ETC_ROOT="$temporary_root/etc"
-export VPSGUARD_STATE_DIR="$temporary_root/etc/vpsguard"
-export VPSGUARD_CONFIG_FILE="$temporary_root/config.env"
-export CONNTRACK_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-vpsguard-conntrack.conf"
-export CONNTRACK_MODPROBE_FILE="$temporary_root/etc/modprobe.d/vpsguard-nf-conntrack.conf"
-export CONNTRACK_MODULES_FILE="$temporary_root/etc/modules-load.d/vpsguard-conntrack.conf"
-export CONNTRACK_HELPER_FILE="$temporary_root/etc/vpsguard/apply-conntrack-profile.sh"
-export CONNTRACK_SERVICE_FILE="$temporary_root/etc/systemd/system/vpsguard-conntrack.service"
-export VPSGUARD_CONNTRACK_LOG_TEXT=""
+export HGUARD_TEST_MODE=1
+export HGUARD_PROC_ROOT="$temporary_root/proc"
+export HGUARD_PROC_SYS_ROOT="$temporary_root/proc/sys"
+export HGUARD_SYS_MODULE_ROOT="$temporary_root/sys/module"
+export HGUARD_ETC_ROOT="$temporary_root/etc"
+export HGUARD_STATE_DIR="$temporary_root/etc/hguard"
+export HGUARD_CONFIG_FILE="$temporary_root/config.env"
+export CONNTRACK_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-hguard-conntrack.conf"
+export CONNTRACK_MODPROBE_FILE="$temporary_root/etc/modprobe.d/hguard-nf-conntrack.conf"
+export CONNTRACK_MODULES_FILE="$temporary_root/etc/modules-load.d/hguard-conntrack.conf"
+export CONNTRACK_HELPER_FILE="$temporary_root/etc/hguard/apply-conntrack-profile.sh"
+export CONNTRACK_SERVICE_FILE="$temporary_root/etc/systemd/system/hguard-conntrack.service"
+export HGUARD_CONNTRACK_LOG_TEXT=""
 # shellcheck source=status.sh
 . "$TEST_ROOT/status.sh"
 
-printf "NEW_USER='statusadmin'\nINSTALL_STATUS='failed'\n" > "$VPSGUARD_CONFIG_FILE"
+printf "NEW_USER='statusadmin'\nINSTALL_STATUS='failed'\n" > "$HGUARD_CONFIG_FILE"
 assert_equal unverified "$(configured_sudo_mode)" "missing SUDO_MODE is unverified"
-printf "SUDO_MODE='password'\n" >> "$VPSGUARD_CONFIG_FILE"
+printf "SUDO_MODE='password'\n" >> "$HGUARD_CONFIG_FILE"
 assert_equal password "$(configured_sudo_mode)" "validated password mode"
-printf "SUDO_MODE='pending'\n" > "$VPSGUARD_CONFIG_FILE"
+printf "SUDO_MODE='pending'\n" > "$HGUARD_CONFIG_FILE"
 assert_equal invalid "$(configured_sudo_mode)" "invalid SUDO_MODE is not inferred"
 
 effective_sshd='port 2222
@@ -104,7 +104,7 @@ assert_file_contains "$TEST_ROOT/status.sh" 'Passwordless sudo effective: %s'
 assert_file_contains "$TEST_ROOT/status.sh" 'No sudo mode has completed validation'
 assert_file_contains "$TEST_ROOT/status.sh" 'configuration and actual behavior are inconsistent'
 
-mkdir -p "$VPSGUARD_PROC_SYS_ROOT/net/netfilter" "$VPSGUARD_SYS_MODULE_ROOT/nf_conntrack/parameters"
+mkdir -p "$HGUARD_PROC_SYS_ROOT/net/netfilter" "$HGUARD_SYS_MODULE_ROOT/nf_conntrack/parameters"
 printf '100\n' > "$(conntrack_count_file)"
 printf '32768\n' > "$(conntrack_max_file)"
 printf '8192\n' > "$(conntrack_hashsize_file)"
@@ -118,15 +118,15 @@ printf '%s\n' "$conntrack_output" | grep -Fq 'Table exhaustion found in accessib
 printf '%s\n' "$conntrack_output" | grep -Fq 'Runtime profile: not configured' || fail "status conntrack unconfigured runtime profile is missing"
 printf '%s\n' "$conntrack_output" | grep -Fq 'Health: OK' || fail "status conntrack health output is missing"
 mkdir -p "$(dirname "$CONNTRACK_SYSCTL_FILE")"
-printf '# Managed by VPSGuard 0.3.6\n' > "$CONNTRACK_SYSCTL_FILE"
+printf '# Managed by Hguard 0.3.6\n' > "$CONNTRACK_SYSCTL_FILE"
 drift_output="$(print_conntrack_status)"
 printf '%s\n' "$drift_output" | grep -Fq 'Runtime profile: drift detected' || fail "status conntrack drift output is missing"
 printf '%s\n' "$drift_output" | grep -Fq "rerun 'sudo bash install.sh --optimize-conntrack'" || fail "status conntrack drift redeploy hint is missing"
 mkdir -p "$(dirname "$CONNTRACK_SERVICE_FILE")" "$(dirname "$CONNTRACK_HELPER_FILE")"
-printf '# Managed by VPSGuard 0.3.6\n[Service]\nType=oneshot\n' > "$CONNTRACK_SERVICE_FILE"
-printf '# Managed by VPSGuard 0.3.6\n' > "$CONNTRACK_HELPER_FILE"
+printf '# Managed by Hguard 0.3.6\n[Service]\nType=oneshot\n' > "$CONNTRACK_SERVICE_FILE"
+printf '# Managed by Hguard 0.3.6\n' > "$CONNTRACK_HELPER_FILE"
 restart_hint_output="$(print_conntrack_status)"
-printf '%s\n' "$restart_hint_output" | grep -Fq "sudo systemctl restart vpsguard-conntrack.service" || fail "status conntrack drift restart hint is missing"
+printf '%s\n' "$restart_hint_output" | grep -Fq "sudo systemctl restart hguard-conntrack.service" || fail "status conntrack drift restart hint is missing"
 printf '65536\n' > "$(conntrack_max_file)"
 printf '16384\n' > "$(conntrack_hashsize_file)"
 printf '30\n' > "$(conntrack_timeout_file syn_sent)"
@@ -134,7 +134,7 @@ printf '20\n' > "$(conntrack_timeout_file syn_recv)"
 printf '30\n' > "$(conntrack_timeout_file time_wait)"
 active_output="$(print_conntrack_status)"
 printf '%s\n' "$active_output" | grep -Fq 'Runtime profile: active' || fail "status conntrack active runtime profile is missing"
-VPSGUARD_CONNTRACK_LOG_TEXT='nf_conntrack: table full, dropping packet'
+HGUARD_CONNTRACK_LOG_TEXT='nf_conntrack: table full, dropping packet'
 critical_output="$(print_conntrack_status)"
 printf '%s\n' "$critical_output" | grep -Fq 'Health: CRITICAL' || fail "status conntrack table-full output is missing"
 printf '%s\n' "$critical_output" | grep -Fq 'Linux has dropped packets' || fail "status conntrack warning is missing"

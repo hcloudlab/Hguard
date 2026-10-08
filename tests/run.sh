@@ -11,4 +11,4 @@ for test_file in "$test_directory"/test_*.sh; do
   count=$((count + 1))
 done
 
-printf '\nAll %s VPSGuard test files passed.\n' "$count"
+printf '\nAll %s Hguard test files passed.\n' "$count"

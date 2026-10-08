@@ -6,10 +6,10 @@ set -euo pipefail
 
 temporary_root="$(mktemp -d)"
 trap 'rm -rf "$temporary_root"' EXIT
-export VPSGUARD_TEST_MODE=1
-export VPSGUARD_ETC_ROOT="$temporary_root/etc"
-export VPSGUARD_STATE_DIR="$temporary_root/etc/vpsguard"
-export VPSGUARD_CONFIG_FILE="$VPSGUARD_STATE_DIR/config.env"
+export HGUARD_TEST_MODE=1
+export HGUARD_ETC_ROOT="$temporary_root/etc"
+export HGUARD_STATE_DIR="$temporary_root/etc/hguard"
+export HGUARD_CONFIG_FILE="$HGUARD_STATE_DIR/config.env"
 # shellcheck source=install.sh
 . "$TEST_ROOT/install.sh"
 
@@ -48,15 +48,15 @@ getent() { printf 'existingadmin:x:1000:1000::/home/existingadmin:/bin/bash\n'; 
 assert_success ensure_managed_user
 assert_file_contains "$usermod_log" '-aG sudo existingadmin'
 
-if VPSGUARD_TEST_MODE=1 VPSGUARD_CONFIG_FILE="$temporary_root/missing-config" bash -c '. "$1"; resolve_managed_user' _ "$TEST_ROOT/install.sh" </dev/null >/dev/null 2>&1; then
+if HGUARD_TEST_MODE=1 HGUARD_CONFIG_FILE="$temporary_root/missing-config" bash -c '. "$1"; resolve_managed_user' _ "$TEST_ROOT/install.sh" </dev/null >/dev/null 2>&1; then
   fail "non-interactive execution without NEW_USER must fail"
 fi
 
 # The inner shell must expand NEW_USER after sourcing install.sh.
 # shellcheck disable=SC2016
-assert_success env VPSGUARD_TEST_MODE=1 VPSGUARD_CONFIG_FILE="$temporary_root/missing-config" NEW_USER=ciadmin bash -c '. "$1"; resolve_managed_user; [ "$NEW_USER" = ciadmin ]' _ "$TEST_ROOT/install.sh"
+assert_success env HGUARD_TEST_MODE=1 HGUARD_CONFIG_FILE="$temporary_root/missing-config" NEW_USER=ciadmin bash -c '. "$1"; resolve_managed_user; [ "$NEW_USER" = ciadmin ]' _ "$TEST_ROOT/install.sh"
 # shellcheck disable=SC2016
-assert_failure env VPSGUARD_TEST_MODE=1 VPSGUARD_CONFIG_FILE="$temporary_root/missing-config" NEW_USER=RootUser bash -c '. "$1"; resolve_managed_user' _ "$TEST_ROOT/install.sh"
+assert_failure env HGUARD_TEST_MODE=1 HGUARD_CONFIG_FILE="$temporary_root/missing-config" NEW_USER=RootUser bash -c '. "$1"; resolve_managed_user' _ "$TEST_ROOT/install.sh"
 
 legacy_default='a''lex'
 legacy_pattern="NEW_USER=.*${legacy_default}|default user: ${legacy_default}|默认.*${legacy_default}"
@@ -76,7 +76,7 @@ printf "NEW_USER='admin'\n" > "$config_file_existing"
 confirm_marker="$temporary_root/confirm-called"
 
 rm -f "$confirm_marker"
-VPSGUARD_TEST_MODE=1 VPSGUARD_CONFIG_FILE="$config_file_existing" CONFIRM_MARKER="$confirm_marker" bash -c '
+HGUARD_TEST_MODE=1 HGUARD_CONFIG_FILE="$config_file_existing" CONFIRM_MARKER="$confirm_marker" bash -c '
   . "$1"
   id() { return 0; }
   confirm_existing_user() { : > "$CONFIRM_MARKER"; }
@@ -85,7 +85,7 @@ VPSGUARD_TEST_MODE=1 VPSGUARD_CONFIG_FILE="$config_file_existing" CONFIRM_MARKER
 [ ! -e "$confirm_marker" ] || fail "confirm_existing_user must not run when NEW_USER matches the already-recorded managed user"
 
 rm -f "$confirm_marker"
-VPSGUARD_TEST_MODE=1 VPSGUARD_CONFIG_FILE="$config_file_existing" NEW_USER=otheruser CONFIRM_MARKER="$confirm_marker" bash -c '
+HGUARD_TEST_MODE=1 HGUARD_CONFIG_FILE="$config_file_existing" NEW_USER=otheruser CONFIRM_MARKER="$confirm_marker" bash -c '
   . "$1"
   id() { return 0; }
   confirm_existing_user() { : > "$CONFIRM_MARKER"; }

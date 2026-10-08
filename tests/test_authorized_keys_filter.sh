@@ -6,11 +6,11 @@ set -euo pipefail
 
 temporary_root="$(mktemp -d)"
 trap 'rm -rf "$temporary_root"' EXIT
-export VPSGUARD_TEST_MODE=1
-export VPSGUARD_ETC_ROOT="$temporary_root/etc"
-export VPSGUARD_STATE_DIR="$temporary_root/etc/vpsguard"
-export VPSGUARD_INSTALLED_MARKER="$VPSGUARD_STATE_DIR/.installed"
-mkdir -p "$VPSGUARD_STATE_DIR"
+export HGUARD_TEST_MODE=1
+export HGUARD_ETC_ROOT="$temporary_root/etc"
+export HGUARD_STATE_DIR="$temporary_root/etc/hguard"
+export HGUARD_INSTALLED_MARKER="$HGUARD_STATE_DIR/.installed"
+mkdir -p "$HGUARD_STATE_DIR"
 # shellcheck source=install-core.sh
 . "$TEST_ROOT/install-core.sh"
 
@@ -31,8 +31,8 @@ restricted_line="no-port-forwarding,no-agent-forwarding,no-X11-forwarding,comman
 from_restricted_line='from="10.0.0.0/8" '"${root_pubkey}"
 
 reset_sandbox() {
-  rm -rf "${temporary_root:?}/home" "${VPSGUARD_INSTALLED_MARKER:?}" "${ROOT_AUTHORIZED_KEYS:?}"
-  mkdir -p "$VPSGUARD_STATE_DIR"
+  rm -rf "${temporary_root:?}/home" "${HGUARD_INSTALLED_MARKER:?}" "${ROOT_AUTHORIZED_KEYS:?}"
+  mkdir -p "$HGUARD_STATE_DIR"
   unset SUDO_USER
 }
 
@@ -116,7 +116,7 @@ mkdir -p "$fake_user_home/.ssh"
 printf '%s\n%s\n' "$sudo_user_pubkey" "$restricted_line" > "$fake_user_home/.ssh/authorized_keys"
 chmod 700 "$fake_user_home/.ssh"
 chmod 600 "$fake_user_home/.ssh/authorized_keys"
-printf 'success\n' > "$VPSGUARD_INSTALLED_MARKER"  # not first install; admin keys non-empty -> fast path
+printf 'success\n' > "$HGUARD_INSTALLED_MARKER"  # not first install; admin keys non-empty -> fast path
 
 assert_success configure_authorized_keys
 assert_file_contains "$fake_user_home/.ssh/authorized_keys" "$sudo_user_pubkey"
@@ -148,7 +148,7 @@ mkdir -p "$fake_user_home/.ssh"
 printf '%s\n' "$sudo_user_pubkey" > "$fake_user_home/.ssh/authorized_keys"
 chmod 700 "$fake_user_home/.ssh"
 chmod 600 "$fake_user_home/.ssh/authorized_keys"
-printf 'success\n' > "$VPSGUARD_INSTALLED_MARKER"  # rerun -> "leave untouched" fast path
+printf 'success\n' > "$HGUARD_INSTALLED_MARKER"  # rerun -> "leave untouched" fast path
 
 chown_log="$temporary_root/chown.log"
 rm -f "$chown_log"

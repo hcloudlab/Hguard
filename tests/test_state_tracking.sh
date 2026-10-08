@@ -6,40 +6,40 @@ set -euo pipefail
 
 temporary_root="$(mktemp -d)"
 trap 'rm -rf "$temporary_root"' EXIT
-export VPSGUARD_TEST_MODE=1
-export VPSGUARD_ETC_ROOT="$temporary_root/etc"
-export VPSGUARD_STATE_DIR="$temporary_root/etc/vpsguard"
-export VPSGUARD_STATE_FILE="$VPSGUARD_STATE_DIR/state.env"
-export VPSGUARD_MANAGED_RULES="$VPSGUARD_STATE_DIR/managed-rules"
-export VPSGUARD_SSHD_CONFIG="$temporary_root/etc/ssh/sshd_config.d/00-vpsguard.conf"
-export FAIL2BAN_JAIL="$temporary_root/etc/fail2ban/jail.d/vpsguard-sshd.local"
-export BBR_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-vpsguard-bbr.conf"
-export BBR_MODULES_FILE="$temporary_root/etc/modules-load.d/vpsguard-bbr.conf"
-export CONNTRACK_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-vpsguard-conntrack.conf"
-export CONNTRACK_MODPROBE_FILE="$temporary_root/etc/modprobe.d/vpsguard-nf-conntrack.conf"
-export CONNTRACK_MODULES_FILE="$temporary_root/etc/modules-load.d/vpsguard-conntrack.conf"
-export CONNTRACK_HELPER_FILE="$temporary_root/etc/vpsguard/apply-conntrack-profile.sh"
-export CONNTRACK_SERVICE_FILE="$temporary_root/etc/systemd/system/vpsguard-conntrack.service"
-export VPSGUARD_RUN_ROOT="$temporary_root/run"
-mkdir -p "$VPSGUARD_RUN_ROOT"
+export HGUARD_TEST_MODE=1
+export HGUARD_ETC_ROOT="$temporary_root/etc"
+export HGUARD_STATE_DIR="$temporary_root/etc/hguard"
+export HGUARD_STATE_FILE="$HGUARD_STATE_DIR/state.env"
+export HGUARD_MANAGED_RULES="$HGUARD_STATE_DIR/managed-rules"
+export HGUARD_SSHD_CONFIG="$temporary_root/etc/ssh/sshd_config.d/00-hguard.conf"
+export FAIL2BAN_JAIL="$temporary_root/etc/fail2ban/jail.d/hguard-sshd.local"
+export BBR_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-hguard-bbr.conf"
+export BBR_MODULES_FILE="$temporary_root/etc/modules-load.d/hguard-bbr.conf"
+export CONNTRACK_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-hguard-conntrack.conf"
+export CONNTRACK_MODPROBE_FILE="$temporary_root/etc/modprobe.d/hguard-nf-conntrack.conf"
+export CONNTRACK_MODULES_FILE="$temporary_root/etc/modules-load.d/hguard-conntrack.conf"
+export CONNTRACK_HELPER_FILE="$temporary_root/etc/hguard/apply-conntrack-profile.sh"
+export CONNTRACK_SERVICE_FILE="$temporary_root/etc/systemd/system/hguard-conntrack.service"
+export HGUARD_RUN_ROOT="$temporary_root/run"
+mkdir -p "$HGUARD_RUN_ROOT"
 # shellcheck source=install.sh
 . "$TEST_ROOT/install.sh"
 
 ufw() { printf 'Status: inactive\n'; }
 systemctl() { return 1; }
 record_preinstall_state
-first_state="$(checksum_file "$VPSGUARD_STATE_FILE")"
+first_state="$(checksum_file "$HGUARD_STATE_FILE")"
 record_preinstall_state
-assert_equal "$first_state" "$(checksum_file "$VPSGUARD_STATE_FILE")" "original state snapshot"
-assert_file_contains "$VPSGUARD_STATE_FILE" "CONNTRACK_SYSCTL_PREEXISTED='false'"
-assert_file_contains "$VPSGUARD_STATE_FILE" "CONNTRACK_MODPROBE_PREEXISTED='false'"
-assert_file_contains "$VPSGUARD_STATE_FILE" "CONNTRACK_MODULES_PREEXISTED='false'"
-assert_file_contains "$VPSGUARD_STATE_FILE" "CONNTRACK_HELPER_PREEXISTED='false'"
-assert_file_contains "$VPSGUARD_STATE_FILE" "CONNTRACK_SERVICE_PREEXISTED='false'"
+assert_equal "$first_state" "$(checksum_file "$HGUARD_STATE_FILE")" "original state snapshot"
+assert_file_contains "$HGUARD_STATE_FILE" "CONNTRACK_SYSCTL_PREEXISTED='false'"
+assert_file_contains "$HGUARD_STATE_FILE" "CONNTRACK_MODPROBE_PREEXISTED='false'"
+assert_file_contains "$HGUARD_STATE_FILE" "CONNTRACK_MODULES_PREEXISTED='false'"
+assert_file_contains "$HGUARD_STATE_FILE" "CONNTRACK_HELPER_PREEXISTED='false'"
+assert_file_contains "$HGUARD_STATE_FILE" "CONNTRACK_SERVICE_PREEXISTED='false'"
 
 record_managed_rule '22/tcp'
 record_managed_rule '22/tcp'
-assert_equal 1 "$(grep -c '^22/tcp$' "$VPSGUARD_MANAGED_RULES")" "managed rule uniqueness"
+assert_equal 1 "$(grep -c '^22/tcp$' "$HGUARD_MANAGED_RULES")" "managed rule uniqueness"
 
 pass "pre-install state is immutable and managed rules are unique"
 
@@ -102,9 +102,9 @@ if printf '%s\n' "$summary_output" | grep -q '重启'; then
   fail "no reboot warning should be printed when /run/reboot-required is absent"
 fi
 
-: > "$VPSGUARD_RUN_ROOT/reboot-required"
+: > "$HGUARD_RUN_ROOT/reboot-required"
 summary_output="$(print_final_summary)"
 assert_file_contains /dev/stdin '系统更新需要重启才能完全生效' <<<"$summary_output"
-rm -f "$VPSGUARD_RUN_ROOT/reboot-required"
+rm -f "$HGUARD_RUN_ROOT/reboot-required"
 
 pass "print_final_summary warns when /run/reboot-required exists, without rebooting"

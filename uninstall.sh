@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VPSGUARD_VERSION="0.3.7"
-VPSGUARD_TEST_MODE="${VPSGUARD_TEST_MODE:-0}"
-VPSGUARD_ETC_ROOT="${VPSGUARD_ETC_ROOT:-/etc}"
-VPSGUARD_STATE_DIR="${VPSGUARD_STATE_DIR:-${VPSGUARD_ETC_ROOT}/vpsguard}"
-VPSGUARD_CONFIG_FILE="${VPSGUARD_CONFIG_FILE:-${VPSGUARD_STATE_DIR}/config.env}"
-VPSGUARD_STATE_FILE="${VPSGUARD_STATE_FILE:-${VPSGUARD_STATE_DIR}/state.env}"
-VPSGUARD_MANAGED_RULES="${VPSGUARD_MANAGED_RULES:-${VPSGUARD_STATE_DIR}/managed-rules}"
-VPSGUARD_INSTALLED_MARKER="${VPSGUARD_INSTALLED_MARKER:-${VPSGUARD_STATE_DIR}/.installed}"
-VPSGUARD_PENDING_PORT_MARKER="${VPSGUARD_PENDING_PORT_MARKER:-${VPSGUARD_STATE_DIR}/.pending-port-finalization}"
-SSHD_CONFIG="${SSHD_CONFIG:-${VPSGUARD_ETC_ROOT}/ssh/sshd_config}"
-VPSGUARD_SSHD_CONFIG="${VPSGUARD_SSHD_CONFIG:-${VPSGUARD_ETC_ROOT}/ssh/sshd_config.d/00-vpsguard.conf}"
-SYSTEMD_SYSTEM_DIR="${SYSTEMD_SYSTEM_DIR:-${VPSGUARD_ETC_ROOT}/systemd/system}"
-VPSGUARD_SSH_SOCKET_OVERRIDE="${VPSGUARD_SSH_SOCKET_OVERRIDE:-${SYSTEMD_SYSTEM_DIR}/ssh.socket.d/00-vpsguard.conf}"
-FAIL2BAN_JAIL="${FAIL2BAN_JAIL:-${VPSGUARD_ETC_ROOT}/fail2ban/jail.d/vpsguard-sshd.local}"
-SUDOERS_DIR="${SUDOERS_DIR:-${VPSGUARD_ETC_ROOT}/sudoers.d}"
-BBR_SYSCTL_FILE="${BBR_SYSCTL_FILE:-${VPSGUARD_ETC_ROOT}/sysctl.d/99-vpsguard-bbr.conf}"
-BBR_MODULES_FILE="${BBR_MODULES_FILE:-${VPSGUARD_ETC_ROOT}/modules-load.d/vpsguard-bbr.conf}"
-CONNTRACK_SYSCTL_FILE="${CONNTRACK_SYSCTL_FILE:-${VPSGUARD_ETC_ROOT}/sysctl.d/99-vpsguard-conntrack.conf}"
-CONNTRACK_MODPROBE_FILE="${CONNTRACK_MODPROBE_FILE:-${VPSGUARD_ETC_ROOT}/modprobe.d/vpsguard-nf-conntrack.conf}"
-CONNTRACK_MODULES_FILE="${CONNTRACK_MODULES_FILE:-${VPSGUARD_ETC_ROOT}/modules-load.d/vpsguard-conntrack.conf}"
-CONNTRACK_HELPER_FILE="${CONNTRACK_HELPER_FILE:-${VPSGUARD_STATE_DIR}/apply-conntrack-profile.sh}"
-CONNTRACK_SERVICE_NAME="${CONNTRACK_SERVICE_NAME:-vpsguard-conntrack.service}"
+HGUARD_VERSION="0.4.0"
+HGUARD_TEST_MODE="${HGUARD_TEST_MODE:-0}"
+HGUARD_ETC_ROOT="${HGUARD_ETC_ROOT:-/etc}"
+HGUARD_STATE_DIR="${HGUARD_STATE_DIR:-${HGUARD_ETC_ROOT}/hguard}"
+HGUARD_CONFIG_FILE="${HGUARD_CONFIG_FILE:-${HGUARD_STATE_DIR}/config.env}"
+HGUARD_STATE_FILE="${HGUARD_STATE_FILE:-${HGUARD_STATE_DIR}/state.env}"
+HGUARD_MANAGED_RULES="${HGUARD_MANAGED_RULES:-${HGUARD_STATE_DIR}/managed-rules}"
+HGUARD_INSTALLED_MARKER="${HGUARD_INSTALLED_MARKER:-${HGUARD_STATE_DIR}/.installed}"
+HGUARD_PENDING_PORT_MARKER="${HGUARD_PENDING_PORT_MARKER:-${HGUARD_STATE_DIR}/.pending-port-finalization}"
+SSHD_CONFIG="${SSHD_CONFIG:-${HGUARD_ETC_ROOT}/ssh/sshd_config}"
+HGUARD_SSHD_CONFIG="${HGUARD_SSHD_CONFIG:-${HGUARD_ETC_ROOT}/ssh/sshd_config.d/00-hguard.conf}"
+SYSTEMD_SYSTEM_DIR="${SYSTEMD_SYSTEM_DIR:-${HGUARD_ETC_ROOT}/systemd/system}"
+HGUARD_SSH_SOCKET_OVERRIDE="${HGUARD_SSH_SOCKET_OVERRIDE:-${SYSTEMD_SYSTEM_DIR}/ssh.socket.d/00-hguard.conf}"
+FAIL2BAN_JAIL="${FAIL2BAN_JAIL:-${HGUARD_ETC_ROOT}/fail2ban/jail.d/hguard-sshd.local}"
+SUDOERS_DIR="${SUDOERS_DIR:-${HGUARD_ETC_ROOT}/sudoers.d}"
+BBR_SYSCTL_FILE="${BBR_SYSCTL_FILE:-${HGUARD_ETC_ROOT}/sysctl.d/99-hguard-bbr.conf}"
+BBR_MODULES_FILE="${BBR_MODULES_FILE:-${HGUARD_ETC_ROOT}/modules-load.d/hguard-bbr.conf}"
+CONNTRACK_SYSCTL_FILE="${CONNTRACK_SYSCTL_FILE:-${HGUARD_ETC_ROOT}/sysctl.d/99-hguard-conntrack.conf}"
+CONNTRACK_MODPROBE_FILE="${CONNTRACK_MODPROBE_FILE:-${HGUARD_ETC_ROOT}/modprobe.d/hguard-nf-conntrack.conf}"
+CONNTRACK_MODULES_FILE="${CONNTRACK_MODULES_FILE:-${HGUARD_ETC_ROOT}/modules-load.d/hguard-conntrack.conf}"
+CONNTRACK_HELPER_FILE="${CONNTRACK_HELPER_FILE:-${HGUARD_STATE_DIR}/apply-conntrack-profile.sh}"
+CONNTRACK_SERVICE_NAME="${CONNTRACK_SERVICE_NAME:-hguard-conntrack.service}"
 CONNTRACK_SERVICE_FILE="${CONNTRACK_SERVICE_FILE:-${SYSTEMD_SYSTEM_DIR}/${CONNTRACK_SERVICE_NAME}}"
 
 GREEN="\033[32m"
@@ -30,8 +30,8 @@ YELLOW="\033[33m"
 RED="\033[31m"
 BOLD="\033[1m"
 NC="\033[0m"
-SSHD_INCLUDE_BEGIN="# BEGIN VPSGuard managed include"
-SSHD_INCLUDE_END="# END VPSGuard managed include"
+SSHD_INCLUDE_BEGIN="# BEGIN Hguard managed include"
+SSHD_INCLUDE_END="# END Hguard managed include"
 
 info() {
   printf '%b[INFO]%b %s\n' "$GREEN" "$NC" "$1"
@@ -62,7 +62,7 @@ read_env_value() {
 
 managed_file_is_owned() {
   local file="$1"
-  [ -f "$file" ] && head -n 1 "$file" | grep -Eq '^# Managed by VPSGuard( |$)'
+  [ -f "$file" ] && head -n 1 "$file" | grep -Eq '^# Managed by Hguard( |$)'
 }
 
 ufw_rule_exists_from_text() {
@@ -108,7 +108,7 @@ remove_owned_file() {
   local file="$1"
   if managed_file_is_owned "$file"; then
     rm -f "$file"
-    info "Removed VPSGuard-managed file: ${file}"
+    info "Removed Hguard-managed file: ${file}"
   elif [ -e "$file" ]; then
     warn "Preserved unrecognized file: ${file}"
   fi
@@ -119,7 +119,7 @@ disable_owned_unit() {
   local unit_name="$2"
 
   if managed_file_is_owned "$unit_file"; then
-    if [ "$VPSGUARD_TEST_MODE" != "1" ] && command -v systemctl >/dev/null 2>&1; then
+    if [ "$HGUARD_TEST_MODE" != "1" ] && command -v systemctl >/dev/null 2>&1; then
       systemctl stop "$unit_name" >/dev/null 2>&1 || warn "Could not stop ${unit_name}; removing the managed unit file anyway."
       systemctl disable "$unit_name" >/dev/null 2>&1 || warn "Could not disable ${unit_name}; removing the managed unit file anyway."
       systemctl daemon-reload || warn "systemctl daemon-reload failed after disabling ${unit_name}."
@@ -130,7 +130,7 @@ disable_owned_unit() {
 }
 
 reload_systemd_after_conntrack_cleanup() {
-  if [ "$VPSGUARD_TEST_MODE" != "1" ] && command -v systemctl >/dev/null 2>&1; then
+  if [ "$HGUARD_TEST_MODE" != "1" ] && command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload || warn "systemctl daemon-reload failed after conntrack cleanup."
   fi
 }
@@ -144,8 +144,8 @@ conntrack_managed_artifact_exists() {
 }
 
 cleanup_empty_state_dir() {
-  [ -d "$VPSGUARD_STATE_DIR" ] || return 0
-  rmdir "$VPSGUARD_STATE_DIR" 2>/dev/null || true
+  [ -d "$HGUARD_STATE_DIR" ] || return 0
+  rmdir "$HGUARD_STATE_DIR" 2>/dev/null || true
 }
 
 cleanup_conntrack_artifacts() {
@@ -160,7 +160,7 @@ cleanup_conntrack_artifacts() {
 }
 
 cleanup_conntrack_only_without_config() {
-  printf '\n%bVPSGuard %s conntrack cleanup%b\n' "$BOLD" "$VPSGUARD_VERSION" "$NC"
+  printf '\n%bHguard %s conntrack cleanup%b\n' "$BOLD" "$HGUARD_VERSION" "$NC"
   cleanup_conntrack_artifacts
   cleanup_empty_state_dir
   info "Conntrack-only cleanup completed."
@@ -170,8 +170,8 @@ remove_safe_ufw_rules() {
   local target_port="$1"
   local rule port
 
-  [ -f "$VPSGUARD_MANAGED_RULES" ] || return 0
-  if [ -f "$VPSGUARD_PENDING_PORT_MARKER" ]; then
+  [ -f "$HGUARD_MANAGED_RULES" ] || return 0
+  if [ -f "$HGUARD_PENDING_PORT_MARKER" ]; then
     warn "Port finalization is pending; all recorded SSH rules are preserved to avoid lockout."
     return 0
   fi
@@ -187,9 +187,9 @@ remove_safe_ufw_rules() {
     fi
     if ufw_tcp_rule_exists "$port"; then
       ufw --force delete allow "$rule"
-      info "Removed recorded VPSGuard UFW rule ${rule}."
+      info "Removed recorded Hguard UFW rule ${rule}."
     fi
-  done < "$VPSGUARD_MANAGED_RULES"
+  done < "$HGUARD_MANAGED_RULES"
 }
 
 remove_fail2ban_jail_safely() {
@@ -204,7 +204,7 @@ remove_fail2ban_jail_safely() {
   info "fail2ban service enablement and unrelated jails were preserved."
 }
 
-remove_vpsguard_sshd_include() {
+remove_hguard_sshd_include() {
   local temporary_file begin_count end_count begin_line end_line mode
 
   if ! begin_count="$(grep -Fxc "$SSHD_INCLUDE_BEGIN" "$SSHD_CONFIG")"; then begin_count=0; fi
@@ -213,13 +213,13 @@ remove_vpsguard_sshd_include() {
     return 0
   fi
   if [ "$begin_count" -ne 1 ] || [ "$end_count" -ne 1 ]; then
-    warn "Malformed VPSGuard include markers were preserved in ${SSHD_CONFIG}."
+    warn "Malformed Hguard include markers were preserved in ${SSHD_CONFIG}."
     return 1
   fi
   begin_line="$(grep -Fn "$SSHD_INCLUDE_BEGIN" "$SSHD_CONFIG" | cut -d: -f1)"
   end_line="$(grep -Fn "$SSHD_INCLUDE_END" "$SSHD_CONFIG" | cut -d: -f1)"
   if [ "$begin_line" -ge "$end_line" ]; then
-    warn "Out-of-order VPSGuard include markers were preserved in ${SSHD_CONFIG}."
+    warn "Out-of-order Hguard include markers were preserved in ${SSHD_CONFIG}."
     return 1
   fi
   temporary_file="$(mktemp "${SSHD_CONFIG}.uninstall.XXXXXX")"
@@ -230,7 +230,7 @@ remove_vpsguard_sshd_include() {
   ' "$SSHD_CONFIG" > "$temporary_file"
   mode="$(stat -c '%a' "$SSHD_CONFIG" 2>/dev/null || printf 644)"
   chmod "$mode" "$temporary_file"
-  if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+  if [ "$HGUARD_TEST_MODE" != "1" ]; then
     chown root:root "$temporary_file"
   fi
   mv -f "$temporary_file" "$SSHD_CONFIG"
@@ -241,48 +241,48 @@ remove_ssh_snippet_safely() {
   local original_port="$2"
   local main_backup snippet_backup="" socket_backup=""
 
-  if [ -e "$VPSGUARD_SSHD_CONFIG" ] && ! managed_file_is_owned "$VPSGUARD_SSHD_CONFIG"; then
-    warn "SSH snippet is not recognizable as VPSGuard-managed; preserving it."
+  if [ -e "$HGUARD_SSHD_CONFIG" ] && ! managed_file_is_owned "$HGUARD_SSHD_CONFIG"; then
+    warn "SSH snippet is not recognizable as Hguard-managed; preserving it."
     return 1
   fi
-  if [ -e "$VPSGUARD_SSH_SOCKET_OVERRIDE" ] && ! managed_file_is_owned "$VPSGUARD_SSH_SOCKET_OVERRIDE"; then
-    warn "ssh.socket override is not recognizable as VPSGuard-managed; preserving it."
+  if [ -e "$HGUARD_SSH_SOCKET_OVERRIDE" ] && ! managed_file_is_owned "$HGUARD_SSH_SOCKET_OVERRIDE"; then
+    warn "ssh.socket override is not recognizable as Hguard-managed; preserving it."
     return 1
   fi
-  if [ "$target_port" != "$original_port" ] || [ -f "$VPSGUARD_PENDING_PORT_MARKER" ]; then
-    warn "VPSGuard SSH policy was preserved because removing a changed/pending port remotely could cause lockout."
+  if [ "$target_port" != "$original_port" ] || [ -f "$HGUARD_PENDING_PORT_MARKER" ]; then
+    warn "Hguard SSH policy was preserved because removing a changed/pending port remotely could cause lockout."
     return 1
   fi
 
-  main_backup="$(mktemp "${SSHD_CONFIG}.vpsguard-backup.XXXXXX")"
+  main_backup="$(mktemp "${SSHD_CONFIG}.hguard-backup.XXXXXX")"
   cp -p "$SSHD_CONFIG" "$main_backup"
-  if [ -e "$VPSGUARD_SSHD_CONFIG" ]; then
-    snippet_backup="$(mktemp "${VPSGUARD_SSHD_CONFIG}.uninstall.XXXXXX")"
-    cp -p "$VPSGUARD_SSHD_CONFIG" "$snippet_backup"
+  if [ -e "$HGUARD_SSHD_CONFIG" ]; then
+    snippet_backup="$(mktemp "${HGUARD_SSHD_CONFIG}.uninstall.XXXXXX")"
+    cp -p "$HGUARD_SSHD_CONFIG" "$snippet_backup"
   fi
-  if [ -e "$VPSGUARD_SSH_SOCKET_OVERRIDE" ]; then
-    socket_backup="$(mktemp "${VPSGUARD_SSH_SOCKET_OVERRIDE}.uninstall.XXXXXX")"
-    cp -p "$VPSGUARD_SSH_SOCKET_OVERRIDE" "$socket_backup"
+  if [ -e "$HGUARD_SSH_SOCKET_OVERRIDE" ]; then
+    socket_backup="$(mktemp "${HGUARD_SSH_SOCKET_OVERRIDE}.uninstall.XXXXXX")"
+    cp -p "$HGUARD_SSH_SOCKET_OVERRIDE" "$socket_backup"
   fi
 
-  remove_vpsguard_sshd_include || return 1
-  rm -f "$VPSGUARD_SSHD_CONFIG"
-  rm -f "$VPSGUARD_SSH_SOCKET_OVERRIDE"
+  remove_hguard_sshd_include || return 1
+  rm -f "$HGUARD_SSHD_CONFIG"
+  rm -f "$HGUARD_SSH_SOCKET_OVERRIDE"
   if sshd -t && apply_ssh_runtime; then
     rm -f "$main_backup"
     [ -z "$snippet_backup" ] || rm -f "$snippet_backup"
     [ -z "$socket_backup" ] || rm -f "$socket_backup"
-    info "Removed VPSGuard SSH include, snippet and socket override after syntax and runtime validation."
+    info "Removed Hguard SSH include, snippet and socket override after syntax and runtime validation."
     return 0
   fi
 
   mv -f "$main_backup" "$SSHD_CONFIG"
-  [ -z "$snippet_backup" ] || mv -f "$snippet_backup" "$VPSGUARD_SSHD_CONFIG"
-  [ -z "$socket_backup" ] || mv -f "$socket_backup" "$VPSGUARD_SSH_SOCKET_OVERRIDE"
+  [ -z "$snippet_backup" ] || mv -f "$snippet_backup" "$HGUARD_SSHD_CONFIG"
+  [ -z "$socket_backup" ] || mv -f "$socket_backup" "$HGUARD_SSH_SOCKET_OVERRIDE"
   if ! apply_ssh_runtime; then
     warn "The SSH policy was restored, but runtime re-application also failed. Keep the current session open and inspect SSH manually."
   fi
-  warn "SSH restoration could not be validated; the VPSGuard policy was restored."
+  warn "SSH restoration could not be validated; the Hguard policy was restored."
   return 1
 }
 
@@ -297,7 +297,7 @@ remove_passwordless_sudoers_safely() {
   local managed_user="$1"
   local sudoers_file backup password_state policy_output
 
-  sudoers_file="${SUDOERS_DIR}/vpsguard-${managed_user}"
+  sudoers_file="${SUDOERS_DIR}/hguard-${managed_user}"
   [ -e "$sudoers_file" ] || return 0
   if ! managed_file_is_owned "$sudoers_file"; then
     warn "Preserved unrecognized sudoers file: ${sudoers_file}"
@@ -336,7 +336,7 @@ remove_passwordless_sudoers_safely() {
     fi
     if ! sudo -u "$managed_user" sudo -n true >/dev/null 2>&1; then
       rm -f "$backup"
-      info "Removed the VPSGuard passwordless sudo policy; standard password-authenticated sudo remains available."
+      info "Removed the Hguard passwordless sudo policy; standard password-authenticated sudo remains available."
       return 0
     fi
   fi
@@ -351,23 +351,23 @@ main() {
   local leftovers="false"
 
   [ "$(id -u)" -eq 0 ] || error "Please run uninstall.sh as root."
-  if ! managed_user="$(read_env_value "$VPSGUARD_CONFIG_FILE" NEW_USER 2>/dev/null)"; then managed_user=""; fi
-  if ! target_port="$(read_env_value "$VPSGUARD_CONFIG_FILE" SSH_PORT 2>/dev/null)"; then target_port=""; fi
-  if ! original_port="$(read_env_value "$VPSGUARD_CONFIG_FILE" ORIGINAL_SSH_PORT 2>/dev/null)"; then original_port=""; fi
-  if ! sudo_mode="$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE 2>/dev/null)"; then sudo_mode="password"; fi
+  if ! managed_user="$(read_env_value "$HGUARD_CONFIG_FILE" NEW_USER 2>/dev/null)"; then managed_user=""; fi
+  if ! target_port="$(read_env_value "$HGUARD_CONFIG_FILE" SSH_PORT 2>/dev/null)"; then target_port=""; fi
+  if ! original_port="$(read_env_value "$HGUARD_CONFIG_FILE" ORIGINAL_SSH_PORT 2>/dev/null)"; then original_port=""; fi
+  if ! sudo_mode="$(read_env_value "$HGUARD_CONFIG_FILE" SUDO_MODE 2>/dev/null)"; then sudo_mode="password"; fi
   if [ -z "$managed_user" ]; then
     if conntrack_managed_artifact_exists; then
       cleanup_conntrack_only_without_config
       return 0
     fi
-    error "VPSGuard config is missing or invalid; refusing an untracked uninstall."
+    error "Hguard config is missing or invalid; refusing an untracked uninstall."
   fi
   case "$sudo_mode" in
     password|passwordless) ;;
-    *) error "VPSGuard config contains an invalid SUDO_MODE; refusing an untracked sudoers change." ;;
+    *) error "Hguard config contains an invalid SUDO_MODE; refusing an untracked sudoers change." ;;
   esac
 
-  printf '\n%bVPSGuard %s safe uninstall%b\n' "$BOLD" "$VPSGUARD_VERSION" "$NC"
+  printf '\n%bHguard %s safe uninstall%b\n' "$BOLD" "$HGUARD_VERSION" "$NC"
   warn "The administrator account, home directory and authorized_keys will NOT be deleted."
   warn "UFW and fail2ban will NOT be globally disabled or reset."
   warn "The current SSH-port rule may be retained to prevent remote lockout."
@@ -393,12 +393,12 @@ main() {
   fi
   info "Administrator account ${managed_user} and all user files were preserved."
 
-  rm -f "$VPSGUARD_INSTALLED_MARKER"
+  rm -f "$HGUARD_INSTALLED_MARKER"
   if [ "$ssh_removed" = "true" ] && [ "$leftovers" = "false" ]; then
-    rm -f "$VPSGUARD_PENDING_PORT_MARKER" "$VPSGUARD_MANAGED_RULES" "$VPSGUARD_CONFIG_FILE" "$VPSGUARD_STATE_FILE" \
-      "${VPSGUARD_STATE_DIR}/.ssh_done" "${VPSGUARD_STATE_DIR}/.sudo_done" "${VPSGUARD_STATE_DIR}/.ufw_done"
-    if ! rmdir "$VPSGUARD_STATE_DIR" 2>/dev/null; then
-      warn "State directory was not empty and was preserved: ${VPSGUARD_STATE_DIR}"
+    rm -f "$HGUARD_PENDING_PORT_MARKER" "$HGUARD_MANAGED_RULES" "$HGUARD_CONFIG_FILE" "$HGUARD_STATE_FILE" \
+      "${HGUARD_STATE_DIR}/.ssh_done" "${HGUARD_STATE_DIR}/.sudo_done" "${HGUARD_STATE_DIR}/.ufw_done"
+    if ! rmdir "$HGUARD_STATE_DIR" 2>/dev/null; then
+      warn "State directory was not empty and was preserved: ${HGUARD_STATE_DIR}"
     fi
     info "Safe uninstall completed."
   else
@@ -406,6 +406,6 @@ main() {
   fi
 }
 
-if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+if [ "$HGUARD_TEST_MODE" != "1" ]; then
   main "$@"
 fi

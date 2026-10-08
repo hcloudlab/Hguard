@@ -6,13 +6,13 @@ set -euo pipefail
 
 temporary_root="$(mktemp -d)"
 trap 'rm -rf "$temporary_root"' EXIT
-export VPSGUARD_TEST_MODE=1
-export VPSGUARD_ETC_ROOT="$temporary_root/etc"
-export VPSGUARD_STATE_DIR="$temporary_root/etc/vpsguard"
-export VPSGUARD_CONFIG_FILE="$VPSGUARD_STATE_DIR/config.env"
+export HGUARD_TEST_MODE=1
+export HGUARD_ETC_ROOT="$temporary_root/etc"
+export HGUARD_STATE_DIR="$temporary_root/etc/hguard"
+export HGUARD_CONFIG_FILE="$HGUARD_STATE_DIR/config.env"
 export SSHD_CONFIG="$temporary_root/etc/ssh/sshd_config"
-export VPSGUARD_SSHD_CONFIG="$temporary_root/etc/ssh/sshd_config.d/00-vpsguard.conf"
-export VPSGUARD_SSH_SOCKET_OVERRIDE="$temporary_root/etc/systemd/system/ssh.socket.d/00-vpsguard.conf"
+export HGUARD_SSHD_CONFIG="$temporary_root/etc/ssh/sshd_config.d/00-hguard.conf"
+export HGUARD_SSH_SOCKET_OVERRIDE="$temporary_root/etc/systemd/system/ssh.socket.d/00-hguard.conf"
 # shellcheck source=install.sh
 . "$TEST_ROOT/install.sh"
 
@@ -51,30 +51,30 @@ with_netid_listener='tcp LISTEN 0      4096                0.0.0.0:22    0.0.0.0
 printf '%s\n' "$with_netid_listener" | ssh_listener_present_from_text 22 \
   || fail "target listener was not recognized in real ss -ltnupH (with Netid column) output"
 
-write_vpsguard_sshd_config true
-assert_file_contains "$VPSGUARD_SSHD_CONFIG" 'Port 2222'
-assert_file_contains "$VPSGUARD_SSHD_CONFIG" 'Port 22'
-write_vpsguard_sshd_config false
-assert_file_contains "$VPSGUARD_SSHD_CONFIG" 'Port 2222'
-if grep -Fxq 'Port 22' "$VPSGUARD_SSHD_CONFIG"; then
+write_hguard_sshd_config true
+assert_file_contains "$HGUARD_SSHD_CONFIG" 'Port 2222'
+assert_file_contains "$HGUARD_SSHD_CONFIG" 'Port 22'
+write_hguard_sshd_config false
+assert_file_contains "$HGUARD_SSHD_CONFIG" 'Port 2222'
+if grep -Fxq 'Port 22' "$HGUARD_SSHD_CONFIG"; then
   fail "old port remained after explicit finalization"
 fi
 
 mkdir -p "$(dirname "$SSHD_CONFIG")"
 printf 'PermitRootLogin prohibit-password\nInclude /etc/ssh/sshd_config.d/*.conf\n' > "$SSHD_CONFIG"
-ensure_vpsguard_sshd_include_first
-assert_equal '# BEGIN VPSGuard managed include' "$(sed -n '1p' "$SSHD_CONFIG")" "VPSGuard include must precede vendor policy"
-assert_equal "Include ${VPSGUARD_SSHD_CONFIG}" "$(sed -n '2p' "$SSHD_CONFIG")" "VPSGuard exact include path"
-assert_equal 1 "$(grep -Fc '# BEGIN VPSGuard managed include' "$SSHD_CONFIG")" "managed include uniqueness"
-ensure_vpsguard_sshd_include_first
-assert_equal 1 "$(grep -Fc '# BEGIN VPSGuard managed include' "$SSHD_CONFIG")" "managed include rerun uniqueness"
+ensure_hguard_sshd_include_first
+assert_equal '# BEGIN Hguard managed include' "$(sed -n '1p' "$SSHD_CONFIG")" "Hguard include must precede vendor policy"
+assert_equal "Include ${HGUARD_SSHD_CONFIG}" "$(sed -n '2p' "$SSHD_CONFIG")" "Hguard exact include path"
+assert_equal 1 "$(grep -Fc '# BEGIN Hguard managed include' "$SSHD_CONFIG")" "managed include uniqueness"
+ensure_hguard_sshd_include_first
+assert_equal 1 "$(grep -Fc '# BEGIN Hguard managed include' "$SSHD_CONFIG")" "managed include rerun uniqueness"
 
-write_vpsguard_ssh_socket_override true
-assert_file_contains "$VPSGUARD_SSH_SOCKET_OVERRIDE" 'ListenStream='
-assert_file_contains "$VPSGUARD_SSH_SOCKET_OVERRIDE" 'ListenStream=0.0.0.0:2222'
-assert_file_contains "$VPSGUARD_SSH_SOCKET_OVERRIDE" 'ListenStream=0.0.0.0:22'
-write_vpsguard_ssh_socket_override false
-if grep -Fxq 'ListenStream=0.0.0.0:22' "$VPSGUARD_SSH_SOCKET_OVERRIDE"; then
+write_hguard_ssh_socket_override true
+assert_file_contains "$HGUARD_SSH_SOCKET_OVERRIDE" 'ListenStream='
+assert_file_contains "$HGUARD_SSH_SOCKET_OVERRIDE" 'ListenStream=0.0.0.0:2222'
+assert_file_contains "$HGUARD_SSH_SOCKET_OVERRIDE" 'ListenStream=0.0.0.0:22'
+write_hguard_ssh_socket_override false
+if grep -Fxq 'ListenStream=0.0.0.0:22' "$HGUARD_SSH_SOCKET_OVERRIDE"; then
   fail "old socket port remained after explicit finalization"
 fi
 
@@ -160,20 +160,20 @@ assert_equal 2 "$apply_runtime_count" "unchanged policy content but target port 
 
 pass "configure_ssh_safely reapplies when the SSH runtime is unhealthy, even if the policy content is unchanged"
 
-export VPSGUARD_PROC_ROOT="$temporary_root/proc"
-mkdir -p "$VPSGUARD_PROC_ROOT/net"
-rm -f "$VPSGUARD_PROC_ROOT/net/if_inet6"  # IPv6 unavailable
+export HGUARD_PROC_ROOT="$temporary_root/proc"
+mkdir -p "$HGUARD_PROC_ROOT/net"
+rm -f "$HGUARD_PROC_ROOT/net/if_inet6"  # IPv6 unavailable
 SSH_PORT=22
-VPSGUARD_SSH_SOCKET_OVERRIDE="$temporary_root/etc/systemd/system/ssh.socket.d/01-vpsguard.conf"
-write_vpsguard_ssh_socket_override false
-assert_file_contains "$VPSGUARD_SSH_SOCKET_OVERRIDE" "0.0.0.0:22"
-if grep -q '::' "$VPSGUARD_SSH_SOCKET_OVERRIDE"; then
+HGUARD_SSH_SOCKET_OVERRIDE="$temporary_root/etc/systemd/system/ssh.socket.d/01-hguard.conf"
+write_hguard_ssh_socket_override false
+assert_file_contains "$HGUARD_SSH_SOCKET_OVERRIDE" "0.0.0.0:22"
+if grep -q '::' "$HGUARD_SSH_SOCKET_OVERRIDE"; then
   fail "socket override must omit IPv6 ListenStream when /proc/net/if_inet6 is absent"
 fi
 
-: > "$VPSGUARD_PROC_ROOT/net/if_inet6"  # IPv6 available
-rm -f "$VPSGUARD_SSH_SOCKET_OVERRIDE"
-write_vpsguard_ssh_socket_override false
-assert_file_contains "$VPSGUARD_SSH_SOCKET_OVERRIDE" "[::]:22"
+: > "$HGUARD_PROC_ROOT/net/if_inet6"  # IPv6 available
+rm -f "$HGUARD_SSH_SOCKET_OVERRIDE"
+write_hguard_ssh_socket_override false
+assert_file_contains "$HGUARD_SSH_SOCKET_OVERRIDE" "[::]:22"
 
-pass "write_vpsguard_ssh_socket_override respects IPv6 availability"
+pass "write_hguard_ssh_socket_override respects IPv6 availability"

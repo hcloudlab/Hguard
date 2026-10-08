@@ -5,11 +5,11 @@ set -euo pipefail
 . "$(dirname "$0")/test_helper.sh"
 
 version="$(tr -d '[:space:]' < "$TEST_ROOT/VERSION")"
-assert_equal 0.3.7 "$version" "VERSION"
-assert_file_contains "$TEST_ROOT/install.sh" 'VPSGUARD_VERSION="0.3.7"'
-assert_file_contains "$TEST_ROOT/status.sh" 'VPSGUARD_VERSION="0.3.7"'
-assert_file_contains "$TEST_ROOT/uninstall.sh" 'VPSGUARD_VERSION="0.3.7"'
-assert_file_contains "$TEST_ROOT/README.md" 'VPSGuard v0.3.7'
+assert_equal 0.4.0 "$version" "VERSION"
+assert_file_contains "$TEST_ROOT/install.sh" 'HGUARD_VERSION="0.4.0"'
+assert_file_contains "$TEST_ROOT/status.sh" 'HGUARD_VERSION="0.4.0"'
+assert_file_contains "$TEST_ROOT/uninstall.sh" 'HGUARD_VERSION="0.4.0"'
+assert_file_contains "$TEST_ROOT/README.md" 'Hguard v0.4.0'
 assert_file_contains "$TEST_ROOT/README.md" '22.04 LTS | 已完成真实 VPS 验证'
 assert_file_contains "$TEST_ROOT/README.md" '24.04 LTS | 已完成真实 VPS 验证'
 assert_file_contains "$TEST_ROOT/README.md" '26.04 LTS | 不支持，安装前报错'

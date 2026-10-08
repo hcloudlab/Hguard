@@ -6,10 +6,10 @@ set -euo pipefail
 
 temporary_root="$(mktemp -d)"
 trap 'rm -rf "$temporary_root"' EXIT
-export VPSGUARD_TEST_MODE=1
-export VPSGUARD_ETC_ROOT="$temporary_root/etc"
-export VPSGUARD_STATE_DIR="$temporary_root/etc/vpsguard"
-export VPSGUARD_MANAGED_RULES="$VPSGUARD_STATE_DIR/managed-rules"
+export HGUARD_TEST_MODE=1
+export HGUARD_ETC_ROOT="$temporary_root/etc"
+export HGUARD_STATE_DIR="$temporary_root/etc/hguard"
+export HGUARD_MANAGED_RULES="$HGUARD_STATE_DIR/managed-rules"
 # shellcheck source=install-core.sh
 . "$TEST_ROOT/install-core.sh"
 

@@ -1,38 +1,44 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# VPSGuard v0.3.7
+# Hguard v0.4.0
 # Ubuntu LTS initialization and SSH hardening with lockout-safe convergence.
 
-VPSGUARD_VERSION="0.3.7"
-VPSGUARD_TEST_MODE="${VPSGUARD_TEST_MODE:-0}"
-VPSGUARD_PROC_ROOT="${VPSGUARD_PROC_ROOT:-/proc}"
-VPSGUARD_PROC_SYS_ROOT="${VPSGUARD_PROC_SYS_ROOT:-${VPSGUARD_PROC_ROOT}/sys}"
-VPSGUARD_SYS_MODULE_ROOT="${VPSGUARD_SYS_MODULE_ROOT:-/sys/module}"
-VPSGUARD_ETC_ROOT="${VPSGUARD_ETC_ROOT:-/etc}"
-VPSGUARD_RUN_ROOT="${VPSGUARD_RUN_ROOT:-/run}"
-VPSGUARD_LOG_FILE="${VPSGUARD_LOG_FILE:-/var/log/vpsguard.log}"
-VPSGUARD_STATE_DIR="${VPSGUARD_STATE_DIR:-${VPSGUARD_ETC_ROOT}/vpsguard}"
-VPSGUARD_CONFIG_FILE="${VPSGUARD_CONFIG_FILE:-${VPSGUARD_STATE_DIR}/config.env}"
-VPSGUARD_STATE_FILE="${VPSGUARD_STATE_FILE:-${VPSGUARD_STATE_DIR}/state.env}"
-VPSGUARD_MANAGED_RULES="${VPSGUARD_MANAGED_RULES:-${VPSGUARD_STATE_DIR}/managed-rules}"
-VPSGUARD_INSTALLED_MARKER="${VPSGUARD_INSTALLED_MARKER:-${VPSGUARD_STATE_DIR}/.installed}"
-VPSGUARD_PENDING_PORT_MARKER="${VPSGUARD_PENDING_PORT_MARKER:-${VPSGUARD_STATE_DIR}/.pending-port-finalization}"
+HGUARD_VERSION="0.4.0"
+HGUARD_TEST_MODE="${HGUARD_TEST_MODE:-0}"
+# Set by status/verify/update/uninstall when they source this file to reuse
+# its constants and functions without running the installer's own main().
+# Distinct from HGUARD_TEST_MODE, which also flips several functions'
+# internal behavior to a sandboxed fake (e.g. apply_conntrack_runtime_values)
+# - lib mode must get the real production behavior of every function.
+HGUARD_LIB_MODE="${HGUARD_LIB_MODE:-0}"
+HGUARD_PROC_ROOT="${HGUARD_PROC_ROOT:-/proc}"
+HGUARD_PROC_SYS_ROOT="${HGUARD_PROC_SYS_ROOT:-${HGUARD_PROC_ROOT}/sys}"
+HGUARD_SYS_MODULE_ROOT="${HGUARD_SYS_MODULE_ROOT:-/sys/module}"
+HGUARD_ETC_ROOT="${HGUARD_ETC_ROOT:-/etc}"
+HGUARD_RUN_ROOT="${HGUARD_RUN_ROOT:-/run}"
+HGUARD_LOG_FILE="${HGUARD_LOG_FILE:-/var/log/hguard.log}"
+HGUARD_STATE_DIR="${HGUARD_STATE_DIR:-${HGUARD_ETC_ROOT}/hguard}"
+HGUARD_CONFIG_FILE="${HGUARD_CONFIG_FILE:-${HGUARD_STATE_DIR}/config.env}"
+HGUARD_STATE_FILE="${HGUARD_STATE_FILE:-${HGUARD_STATE_DIR}/state.env}"
+HGUARD_MANAGED_RULES="${HGUARD_MANAGED_RULES:-${HGUARD_STATE_DIR}/managed-rules}"
+HGUARD_INSTALLED_MARKER="${HGUARD_INSTALLED_MARKER:-${HGUARD_STATE_DIR}/.installed}"
+HGUARD_PENDING_PORT_MARKER="${HGUARD_PENDING_PORT_MARKER:-${HGUARD_STATE_DIR}/.pending-port-finalization}"
 
-SSHD_CONFIG="${SSHD_CONFIG:-${VPSGUARD_ETC_ROOT}/ssh/sshd_config}"
-SSHD_CONFIG_DIR="${SSHD_CONFIG_DIR:-${VPSGUARD_ETC_ROOT}/ssh/sshd_config.d}"
-VPSGUARD_SSHD_CONFIG="${VPSGUARD_SSHD_CONFIG:-${SSHD_CONFIG_DIR}/00-vpsguard.conf}"
-SYSTEMD_SYSTEM_DIR="${SYSTEMD_SYSTEM_DIR:-${VPSGUARD_ETC_ROOT}/systemd/system}"
-VPSGUARD_SSH_SOCKET_OVERRIDE="${VPSGUARD_SSH_SOCKET_OVERRIDE:-${SYSTEMD_SYSTEM_DIR}/ssh.socket.d/00-vpsguard.conf}"
-FAIL2BAN_JAIL="${FAIL2BAN_JAIL:-${VPSGUARD_ETC_ROOT}/fail2ban/jail.d/vpsguard-sshd.local}"
-SUDOERS_DIR="${SUDOERS_DIR:-${VPSGUARD_ETC_ROOT}/sudoers.d}"
-BBR_SYSCTL_FILE="${BBR_SYSCTL_FILE:-${VPSGUARD_ETC_ROOT}/sysctl.d/99-vpsguard-bbr.conf}"
-BBR_MODULES_FILE="${BBR_MODULES_FILE:-${VPSGUARD_ETC_ROOT}/modules-load.d/vpsguard-bbr.conf}"
-CONNTRACK_SYSCTL_FILE="${CONNTRACK_SYSCTL_FILE:-${VPSGUARD_ETC_ROOT}/sysctl.d/99-vpsguard-conntrack.conf}"
-CONNTRACK_MODPROBE_FILE="${CONNTRACK_MODPROBE_FILE:-${VPSGUARD_ETC_ROOT}/modprobe.d/vpsguard-nf-conntrack.conf}"
-CONNTRACK_MODULES_FILE="${CONNTRACK_MODULES_FILE:-${VPSGUARD_ETC_ROOT}/modules-load.d/vpsguard-conntrack.conf}"
-CONNTRACK_HELPER_FILE="${CONNTRACK_HELPER_FILE:-${VPSGUARD_STATE_DIR}/apply-conntrack-profile.sh}"
-CONNTRACK_SERVICE_NAME="${CONNTRACK_SERVICE_NAME:-vpsguard-conntrack.service}"
+SSHD_CONFIG="${SSHD_CONFIG:-${HGUARD_ETC_ROOT}/ssh/sshd_config}"
+SSHD_CONFIG_DIR="${SSHD_CONFIG_DIR:-${HGUARD_ETC_ROOT}/ssh/sshd_config.d}"
+HGUARD_SSHD_CONFIG="${HGUARD_SSHD_CONFIG:-${SSHD_CONFIG_DIR}/00-hguard.conf}"
+SYSTEMD_SYSTEM_DIR="${SYSTEMD_SYSTEM_DIR:-${HGUARD_ETC_ROOT}/systemd/system}"
+HGUARD_SSH_SOCKET_OVERRIDE="${HGUARD_SSH_SOCKET_OVERRIDE:-${SYSTEMD_SYSTEM_DIR}/ssh.socket.d/00-hguard.conf}"
+FAIL2BAN_JAIL="${FAIL2BAN_JAIL:-${HGUARD_ETC_ROOT}/fail2ban/jail.d/hguard-sshd.local}"
+SUDOERS_DIR="${SUDOERS_DIR:-${HGUARD_ETC_ROOT}/sudoers.d}"
+BBR_SYSCTL_FILE="${BBR_SYSCTL_FILE:-${HGUARD_ETC_ROOT}/sysctl.d/99-hguard-bbr.conf}"
+BBR_MODULES_FILE="${BBR_MODULES_FILE:-${HGUARD_ETC_ROOT}/modules-load.d/hguard-bbr.conf}"
+CONNTRACK_SYSCTL_FILE="${CONNTRACK_SYSCTL_FILE:-${HGUARD_ETC_ROOT}/sysctl.d/99-hguard-conntrack.conf}"
+CONNTRACK_MODPROBE_FILE="${CONNTRACK_MODPROBE_FILE:-${HGUARD_ETC_ROOT}/modprobe.d/hguard-nf-conntrack.conf}"
+CONNTRACK_MODULES_FILE="${CONNTRACK_MODULES_FILE:-${HGUARD_ETC_ROOT}/modules-load.d/hguard-conntrack.conf}"
+CONNTRACK_HELPER_FILE="${CONNTRACK_HELPER_FILE:-${HGUARD_STATE_DIR}/apply-conntrack-profile.sh}"
+CONNTRACK_SERVICE_NAME="${CONNTRACK_SERVICE_NAME:-hguard-conntrack.service}"
 CONNTRACK_SERVICE_FILE="${CONNTRACK_SERVICE_FILE:-${SYSTEMD_SYSTEM_DIR}/${CONNTRACK_SERVICE_NAME}}"
 ROOT_AUTHORIZED_KEYS="${ROOT_AUTHORIZED_KEYS:-/root/.ssh/authorized_keys}"
 
@@ -55,8 +61,8 @@ SSH_RUNTIME_MODE="unknown"
 SSH_SERVICE_UNIT=""
 INSTALLER_IP=""
 FAIL2BAN_READY_ATTEMPTS=15
-SSHD_INCLUDE_BEGIN="# BEGIN VPSGuard managed include"
-SSHD_INCLUDE_END="# END VPSGuard managed include"
+SSHD_INCLUDE_BEGIN="# BEGIN Hguard managed include"
+SSHD_INCLUDE_END="# END Hguard managed include"
 
 GREEN="\033[32m"
 YELLOW="\033[33m"
@@ -68,13 +74,13 @@ log_plain() {
   local level="$1"
   local message="$2"
 
-  if [ "$VPSGUARD_TEST_MODE" = "1" ]; then
+  if [ "$HGUARD_TEST_MODE" = "1" ]; then
     return 0
   fi
 
-  mkdir -p "$(dirname "$VPSGUARD_LOG_FILE")"
-  printf '%s [%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$level" "$message" >> "$VPSGUARD_LOG_FILE"
-  chmod 600 "$VPSGUARD_LOG_FILE"
+  mkdir -p "$(dirname "$HGUARD_LOG_FILE")"
+  printf '%s [%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$level" "$message" >> "$HGUARD_LOG_FILE"
+  chmod 600 "$HGUARD_LOG_FILE"
 }
 
 info() {
@@ -110,7 +116,7 @@ ensure_directory() {
   # operations run against an attacker-chosen target instead.
   [ ! -L "$path" ] || error "${path} is a symlink; refusing to follow it."
   chmod "$mode" "$path"
-  if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+  if [ "$HGUARD_TEST_MODE" != "1" ]; then
     chown root:root "$path"
   fi
 }
@@ -131,14 +137,14 @@ atomic_write() {
   if [ ! -d "$directory" ]; then
     mkdir -p "$directory"
     chmod 755 "$directory"
-    if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+    if [ "$HGUARD_TEST_MODE" != "1" ]; then
       chown root:root "$directory"
     fi
   fi
   temporary_file="$(mktemp "${path}.tmp.XXXXXX")"
   printf '%s' "$content" > "$temporary_file"
   chmod "$mode" "$temporary_file"
-  if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+  if [ "$HGUARD_TEST_MODE" != "1" ]; then
     chown root:root "$temporary_file"
   fi
   mv -f "$temporary_file" "$path"
@@ -147,7 +153,7 @@ atomic_write() {
 
 assert_managed_or_absent() {
   local path="$1"
-  if [ -e "$path" ] && ! head -n 2 "$path" | grep -Fq 'Managed by VPSGuard'; then
+  if [ -e "$path" ] && ! head -n 2 "$path" | grep -Fq 'Managed by Hguard'; then
     error "Refusing to overwrite an unrecognized existing file: ${path}"
   fi
 }
@@ -203,13 +209,13 @@ write_config_env() {
 "
   fi
 
-  content="# Managed by VPSGuard ${VPSGUARD_VERSION}; values are validated before use.
+  content="# Managed by Hguard ${HGUARD_VERSION}; values are validated before use.
 NEW_USER='${NEW_USER}'
 ${sudo_mode_line}SSH_PORT='${SSH_PORT}'
 ORIGINAL_SSH_PORT='${ORIGINAL_SSH_PORT}'
 INSTALL_STATUS='${install_status}'
 "
-  atomic_write "$VPSGUARD_CONFIG_FILE" 600 "$content"
+  atomic_write "$HGUARD_CONFIG_FILE" 600 "$content"
 }
 
 write_pending_config_env() {
@@ -237,7 +243,7 @@ record_preinstall_state() {
   local conntrack_helper_preexisting conntrack_service_preexisting
   local content
 
-  if [ -f "$VPSGUARD_STATE_FILE" ]; then
+  if [ -f "$HGUARD_STATE_FILE" ]; then
     info "Pre-install state already recorded; preserving the original snapshot."
     return 0
   fi
@@ -256,9 +262,9 @@ record_preinstall_state() {
     fail2ban_enabled="$(boolean_command_state systemctl is-enabled --quiet fail2ban.service)"
   fi
 
-  sshd_dropin_preexisting="$(boolean_command_state test -e "$VPSGUARD_SSHD_CONFIG")"
+  sshd_dropin_preexisting="$(boolean_command_state test -e "$HGUARD_SSHD_CONFIG")"
   sshd_include_preexisting="$(boolean_command_state grep -Fqx "$SSHD_INCLUDE_BEGIN" "$SSHD_CONFIG")"
-  ssh_socket_override_preexisting="$(boolean_command_state test -e "$VPSGUARD_SSH_SOCKET_OVERRIDE")"
+  ssh_socket_override_preexisting="$(boolean_command_state test -e "$HGUARD_SSH_SOCKET_OVERRIDE")"
   fail2ban_jail_preexisting="$(boolean_command_state test -e "$FAIL2BAN_JAIL")"
   bbr_sysctl_preexisting="$(boolean_command_state test -e "$BBR_SYSCTL_FILE")"
   bbr_modules_preexisting="$(boolean_command_state test -e "$BBR_MODULES_FILE")"
@@ -268,7 +274,7 @@ record_preinstall_state() {
   conntrack_helper_preexisting="$(boolean_command_state test -e "$CONNTRACK_HELPER_FILE")"
   conntrack_service_preexisting="$(boolean_command_state test -e "$CONNTRACK_SERVICE_FILE")"
 
-  content="# VPSGuard pre-install state. Parsed as data; never sourced.
+  content="# Hguard pre-install state. Parsed as data; never sourced.
 UFW_INSTALLED='${ufw_installed}'
 UFW_ACTIVE='${ufw_active}'
 FAIL2BAN_INSTALLED='${fail2ban_installed}'
@@ -286,20 +292,20 @@ CONNTRACK_MODULES_PREEXISTED='${conntrack_modules_preexisting}'
 CONNTRACK_HELPER_PREEXISTED='${conntrack_helper_preexisting}'
 CONNTRACK_SERVICE_PREEXISTED='${conntrack_service_preexisting}'
 "
-  atomic_write "$VPSGUARD_STATE_FILE" 600 "$content"
-  atomic_write "$VPSGUARD_MANAGED_RULES" 600 "# UFW rules added by VPSGuard
+  atomic_write "$HGUARD_STATE_FILE" 600 "$content"
+  atomic_write "$HGUARD_MANAGED_RULES" 600 "# UFW rules added by Hguard
 "
   info "Recorded pre-install service and managed-file state."
 }
 
 require_root() {
   if [ "$(id -u)" -ne 0 ]; then
-    error "Please run VPSGuard as root."
+    error "Please run Hguard as root."
   fi
 }
 
 check_ubuntu_lts() {
-  local os_release="${VPSGUARD_ETC_ROOT}/os-release"
+  local os_release="${HGUARD_ETC_ROOT}/os-release"
 
   [ -f "$os_release" ] || error "Cannot detect Ubuntu: ${os_release} is missing."
   # shellcheck disable=SC1090
@@ -363,7 +369,7 @@ confirm_existing_user() {
   local username="$1"
   local answer
 
-  info "User ${username} already exists. VPSGuard will preserve its password, home and existing SSH keys."
+  info "User ${username} already exists. Hguard will preserve its password, home and existing SSH keys."
   if [ ! -t 0 ]; then
     return 0
   fi
@@ -376,7 +382,7 @@ resolve_managed_user() {
   local configured_user=""
   local selection
 
-  if ! configured_user="$(read_env_value "$VPSGUARD_CONFIG_FILE" NEW_USER 2>/dev/null)"; then
+  if ! configured_user="$(read_env_value "$HGUARD_CONFIG_FILE" NEW_USER 2>/dev/null)"; then
     configured_user=""
   fi
   PREVIOUS_MANAGED_USER="$configured_user"
@@ -385,9 +391,9 @@ resolve_managed_user() {
     validate_username "$REQUESTED_NEW_USER" || error "Invalid NEW_USER value: ${REQUESTED_NEW_USER}"
     NEW_USER="$REQUESTED_NEW_USER"
   elif [ -n "$configured_user" ]; then
-    validate_username "$configured_user" || error "Configured NEW_USER is invalid. Repair ${VPSGUARD_CONFIG_FILE}."
+    validate_username "$configured_user" || error "Configured NEW_USER is invalid. Repair ${HGUARD_CONFIG_FILE}."
     NEW_USER="$configured_user"
-    info "检测到 VPSGuard 管理用户：${NEW_USER}"
+    info "检测到 Hguard 管理用户：${NEW_USER}"
     if [ -t 0 ]; then
       printf '1. 继续使用\n2. 更换管理用户\n3. 取消\n'
       read -r -p "请选择 [1]：" selection
@@ -409,7 +415,7 @@ resolve_managed_user() {
     warn "Management is moving from ${PREVIOUS_MANAGED_USER} to ${NEW_USER}; the old user and its data will be preserved."
   fi
   validate_existing_user_account "$NEW_USER"
-  # Only confirm when NEW_USER is an existing OS account VPSGuard did not
+  # Only confirm when NEW_USER is an existing OS account Hguard did not
   # already manage. When it's the same user recorded in config.env, the
   # "1. 继续使用" menu choice above (or a non-interactive rerun with the
   # same NEW_USER) is already that confirmation - asking again with a
@@ -487,9 +493,9 @@ resolve_sudo_mode() {
   local configured_mode=""
   local selected_mode
 
-  if [ -f "$VPSGUARD_CONFIG_FILE" ]; then
-    if configured_mode="$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE 2>/dev/null)"; then
-      validate_sudo_mode "$configured_mode" || error "Configured SUDO_MODE is invalid. Repair ${VPSGUARD_CONFIG_FILE}."
+  if [ -f "$HGUARD_CONFIG_FILE" ]; then
+    if configured_mode="$(read_env_value "$HGUARD_CONFIG_FILE" SUDO_MODE 2>/dev/null)"; then
+      validate_sudo_mode "$configured_mode" || error "Configured SUDO_MODE is invalid. Repair ${HGUARD_CONFIG_FILE}."
       PREVIOUS_SUDO_MODE="$configured_mode"
       if [ -t 0 ]; then
         if ! selected_mode="$(prompt_rerun_sudo_mode "$configured_mode")"; then
@@ -545,17 +551,17 @@ detect_current_ssh_port() {
 }
 
 prepare_sshd_runtime_directory() {
-  ensure_directory "${VPSGUARD_RUN_ROOT}/sshd" 755
+  ensure_directory "${HGUARD_RUN_ROOT}/sshd" 755
 }
 
 finalized_port_state_matches() {
   local configured_port="$1"
   local installed_status
 
-  [ -f "$VPSGUARD_INSTALLED_MARKER" ] || return 1
-  [ ! -e "$VPSGUARD_PENDING_PORT_MARKER" ] || return 1
+  [ -f "$HGUARD_INSTALLED_MARKER" ] || return 1
+  [ ! -e "$HGUARD_PENDING_PORT_MARKER" ] || return 1
   [ "$configured_port" = "$SSH_PORT" ] || return 1
-  if ! installed_status="$(awk 'NF {print; exit}' "$VPSGUARD_INSTALLED_MARKER" 2>/dev/null)"; then
+  if ! installed_status="$(awk 'NF {print; exit}' "$HGUARD_INSTALLED_MARKER" 2>/dev/null)"; then
     installed_status=""
   fi
   case "$installed_status" in
@@ -577,10 +583,10 @@ resolve_port_migration_requirement() {
 resolve_ssh_ports() {
   local configured_port configured_original
 
-  if ! configured_port="$(read_env_value "$VPSGUARD_CONFIG_FILE" SSH_PORT 2>/dev/null)"; then
+  if ! configured_port="$(read_env_value "$HGUARD_CONFIG_FILE" SSH_PORT 2>/dev/null)"; then
     configured_port=""
   fi
-  if ! configured_original="$(read_env_value "$VPSGUARD_CONFIG_FILE" ORIGINAL_SSH_PORT 2>/dev/null)"; then
+  if ! configured_original="$(read_env_value "$HGUARD_CONFIG_FILE" ORIGINAL_SSH_PORT 2>/dev/null)"; then
     configured_original=""
   fi
   ORIGINAL_SSH_PORT="$(detect_current_ssh_port)"
@@ -603,10 +609,10 @@ resolve_ssh_ports() {
 }
 
 upgrade_system() {
-  info "Updating Ubuntu packages and installing VPSGuard dependencies..."
+  info "Updating Ubuntu packages and installing Hguard dependencies..."
   export NEEDRESTART_MODE=l
   apt-get update
-  if [ ! -s "$VPSGUARD_INSTALLED_MARKER" ]; then
+  if [ ! -s "$HGUARD_INSTALLED_MARKER" ]; then
     DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y --with-new-pkgs
   fi
   DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install -y sudo curl wget git vim nano unzip ufw fail2ban python3-systemd htop jq ca-certificates gnupg lsb-release net-tools iproute2 openssh-server
@@ -621,7 +627,7 @@ ensure_managed_user() {
   if id "$NEW_USER" >/dev/null 2>&1; then
     info "Reconciling existing user ${NEW_USER}."
   else
-    [ -t 0 ] || error "Creating a new administrator requires a trusted interactive terminal. VPSGuard does not accept sudo risk confirmation or passwords through automation variables."
+    [ -t 0 ] || error "Creating a new administrator requires a trusted interactive terminal. Hguard does not accept sudo risk confirmation or passwords through automation variables."
     info "Creating administrator user ${NEW_USER}."
     adduser --disabled-password --gecos "" "$NEW_USER"
   fi
@@ -693,7 +699,7 @@ check_root_ssh_key() {
 
 # Removes any line from the admin's authorized_keys that is verbatim
 # identical to a forced-command line in root's authorized_keys - residue
-# from a previous VPSGuard run that copied such a line before this check
+# from a previous Hguard run that copied such a line before this check
 # existed. Every other line is left untouched.
 purge_root_forced_command_residue() {
   local target_file="$1" root_file="$2" restricted_tmp filtered_tmp
@@ -719,14 +725,14 @@ purge_root_forced_command_residue() {
 
 root_pubkey_sync_required() {
   local user_home authorized_keys
-  [ -s "$VPSGUARD_INSTALLED_MARKER" ] || return 0
+  [ -s "$HGUARD_INSTALLED_MARKER" ] || return 0
   user_home="$(managed_user_home)"
   authorized_keys="${user_home}/.ssh/authorized_keys"
   [ -s "$authorized_keys" ] || return 0
   return 1
 }
 
-# The admin's own ~/.ssh is not a VPSGuard-owned directory like the ones
+# The admin's own ~/.ssh is not a Hguard-owned directory like the ones
 # ensure_directory manages (which it chowns to root:root) - it must stay
 # owned by the admin, or sshd (reading authorized_keys as that user) will
 # refuse to even enter the directory and reject an otherwise-valid key.
@@ -763,7 +769,7 @@ configure_authorized_keys() {
     error "${authorized_keys} is a symlink; refusing to follow it."
   fi
 
-  # ensure_directory is for root-owned VPSGuard directories; it chowns to
+  # ensure_directory is for root-owned Hguard directories; it chowns to
   # root:root, which would leave the admin's own ~/.ssh unreadable by sshd
   # under their identity. Every return path below - including the "leave
   # untouched" rerun fast path - must go through this instead.
@@ -797,16 +803,20 @@ configure_authorized_keys() {
 }
 
 sudoers_file_for_user() {
-  printf '%s/vpsguard-%s\n' "$SUDOERS_DIR" "$NEW_USER"
+  printf '%s/hguard-%s\n' "$SUDOERS_DIR" "$NEW_USER"
 }
 
 legacy_sudoers_file_for_user() {
+  # This is a VPSGuard-era filename (predates the vpsguard-<user> scheme,
+  # two generations back from today's hguard-<user>), not an Hguard name -
+  # kept as-is so a sudoers file from that old generation still gets found
+  # and cleaned up, same as before the rename.
   printf '%s/90-vpsguard-%s\n' "$SUDOERS_DIR" "$NEW_USER"
 }
 
 managed_file_is_owned() {
   local file="$1"
-  [ -f "$file" ] && head -n 2 "$file" | grep -Eq '^# Managed by VPSGuard( |$)'
+  [ -f "$file" ] && head -n 2 "$file" | grep -Eq '^# Managed by Hguard( |$)'
 }
 
 user_in_sudo_group() {
@@ -865,7 +875,7 @@ validate_passwordless_sudoers_file() {
   managed_file_is_owned "$sudoers_file" || return 1
   [ "$(sudoers_file_mode "$sudoers_file")" = "440" ] || return 1
   [ "$(grep -Fxc "$expected_line" "$sudoers_file")" -eq 1 ] || return 1
-  if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+  if [ "$HGUARD_TEST_MODE" != "1" ]; then
     [ "$(stat -c '%U:%G' "$sudoers_file" 2>/dev/null)" = "root:root" ] || return 1
   fi
   visudo -cf "$sudoers_file" >/dev/null 2>&1
@@ -877,10 +887,10 @@ ensure_sudo_password() {
     return 0
   fi
 
-  if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
-    [ -t 0 ] || error "Administrator ${NEW_USER} has no usable password. Set one with 'passwd ${NEW_USER}' from a trusted console, then rerun VPSGuard."
+  if [ "$HGUARD_TEST_MODE" != "1" ]; then
+    [ -t 0 ] || error "Administrator ${NEW_USER} has no usable password. Set one with 'passwd ${NEW_USER}' from a trusted console, then rerun Hguard."
   fi
-  warn "VPSGuard uses standard password-authenticated sudo. Set a strong password for ${NEW_USER}; it is not used for SSH login."
+  warn "Hguard uses standard password-authenticated sudo. Set a strong password for ${NEW_USER}; it is not used for SSH login."
   warn "部分云镜像会强制检查密码强度，建议使用随机生成的强密码（例如 openssl rand -base64 18），避免因密码过弱被拒绝。"
   if ! passwd "$NEW_USER"; then
     warn "Could not set the sudo password for ${NEW_USER}."
@@ -893,7 +903,7 @@ ensure_sudo_password() {
 }
 
 confirm_sudo_password_authentication() {
-  if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+  if [ "$HGUARD_TEST_MODE" != "1" ]; then
     [ -t 0 ] || return 1
     info "Enter the password for ${NEW_USER} once to validate 'sudo -i' authentication before SSH is changed."
   fi
@@ -931,7 +941,7 @@ configure_passwordless_sudo() {
     fi
   fi
 
-  content="# Managed by VPSGuard ${VPSGUARD_VERSION}; passwordless sudo mode.
+  content="# Managed by Hguard ${HGUARD_VERSION}; passwordless sudo mode.
 ${NEW_USER} ALL=(ALL:ALL) NOPASSWD: ALL
 "
   if ! atomic_write "$sudoers_file" 440 "$content"; then
@@ -975,7 +985,7 @@ check_sudo_mode_compatibility() {
 
   [ "$SUDO_MODE" = "password" ] || return 0
   if foreign_nopasswd="$(detect_foreign_nopasswd_sudoers)"; then
-    error "检测到 ${foreign_nopasswd} 已授予 ${NEW_USER} 免密码 sudo（通常来自 cloud-init），与 password 模式冲突。请手动检查该文件并决定是否删除或修改后重试；VPSGuard 不会自动修改它。"
+    error "检测到 ${foreign_nopasswd} 已授予 ${NEW_USER} 免密码 sudo（通常来自 cloud-init），与 password 模式冲突。请手动检查该文件并决定是否删除或修改后重试；Hguard 不会自动修改它。"
   fi
 }
 
@@ -994,7 +1004,7 @@ configure_password_sudo() {
     return 1
   fi
   if foreign_nopasswd="$(detect_foreign_nopasswd_sudoers)"; then
-    warn "检测到 ${foreign_nopasswd} 已授予 ${NEW_USER} 免密码 sudo（通常来自 cloud-init），与 password 模式冲突。请手动检查该文件并决定是否删除或修改后重试；VPSGuard 不会自动修改它。"
+    warn "检测到 ${foreign_nopasswd} 已授予 ${NEW_USER} 免密码 sudo（通常来自 cloud-init），与 password 模式冲突。请手动检查该文件并决定是否删除或修改后重试；Hguard 不会自动修改它。"
     return 1
   fi
 
@@ -1106,31 +1116,31 @@ record_managed_rule() {
   local rule="$1"
   local temporary_file
 
-  [ -f "$VPSGUARD_MANAGED_RULES" ] || atomic_write "$VPSGUARD_MANAGED_RULES" 600 "# UFW rules added by VPSGuard
+  [ -f "$HGUARD_MANAGED_RULES" ] || atomic_write "$HGUARD_MANAGED_RULES" 600 "# UFW rules added by Hguard
 "
-  grep -Fxq "$rule" "$VPSGUARD_MANAGED_RULES" && return 0
-  temporary_file="$(mktemp "${VPSGUARD_MANAGED_RULES}.tmp.XXXXXX")"
-  awk 'NF && !seen[$0]++' "$VPSGUARD_MANAGED_RULES" > "$temporary_file"
+  grep -Fxq "$rule" "$HGUARD_MANAGED_RULES" && return 0
+  temporary_file="$(mktemp "${HGUARD_MANAGED_RULES}.tmp.XXXXXX")"
+  awk 'NF && !seen[$0]++' "$HGUARD_MANAGED_RULES" > "$temporary_file"
   printf '%s\n' "$rule" >> "$temporary_file"
   chmod 600 "$temporary_file"
-  if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+  if [ "$HGUARD_TEST_MODE" != "1" ]; then
     chown root:root "$temporary_file"
   fi
-  mv -f "$temporary_file" "$VPSGUARD_MANAGED_RULES"
+  mv -f "$temporary_file" "$HGUARD_MANAGED_RULES"
 }
 
 remove_managed_rule_record() {
   local rule="$1"
   local temporary_file
 
-  [ -f "$VPSGUARD_MANAGED_RULES" ] || return 0
-  temporary_file="$(mktemp "${VPSGUARD_MANAGED_RULES}.tmp.XXXXXX")"
-  awk -v unwanted="$rule" '$0 != unwanted' "$VPSGUARD_MANAGED_RULES" > "$temporary_file"
+  [ -f "$HGUARD_MANAGED_RULES" ] || return 0
+  temporary_file="$(mktemp "${HGUARD_MANAGED_RULES}.tmp.XXXXXX")"
+  awk -v unwanted="$rule" '$0 != unwanted' "$HGUARD_MANAGED_RULES" > "$temporary_file"
   chmod 600 "$temporary_file"
-  if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+  if [ "$HGUARD_TEST_MODE" != "1" ]; then
     chown root:root "$temporary_file"
   fi
-  mv -f "$temporary_file" "$VPSGUARD_MANAGED_RULES"
+  mv -f "$temporary_file" "$HGUARD_MANAGED_RULES"
 }
 
 ensure_ufw_tcp_rule() {
@@ -1275,18 +1285,18 @@ configure_ufw_before_ssh() {
   ufw_is_active || error "UFW is not active after configuration."
 }
 
-write_vpsguard_sshd_config() {
+write_hguard_sshd_config() {
   local keep_old_port="${1:-false}"
   local port_lines content
 
-  assert_managed_or_absent "$VPSGUARD_SSHD_CONFIG"
+  assert_managed_or_absent "$HGUARD_SSHD_CONFIG"
   port_lines="Port ${SSH_PORT}"
   if [ "$keep_old_port" = "true" ] && [ "$ORIGINAL_SSH_PORT" != "$SSH_PORT" ]; then
     port_lines="${port_lines}
 Port ${ORIGINAL_SSH_PORT}"
   fi
 
-  content="# Managed by VPSGuard ${VPSGUARD_VERSION}. Do not edit; change ${VPSGUARD_CONFIG_FILE} and rerun.
+  content="# Managed by Hguard ${HGUARD_VERSION}. Do not edit; change ${HGUARD_CONFIG_FILE} and rerun.
 ${port_lines}
 PermitRootLogin no
 PasswordAuthentication no
@@ -1295,10 +1305,10 @@ KbdInteractiveAuthentication no
 PermitEmptyPasswords no
 X11Forwarding no
 "
-  atomic_write "$VPSGUARD_SSHD_CONFIG" 600 "$content"
+  atomic_write "$HGUARD_SSHD_CONFIG" 600 "$content"
 }
 
-ensure_vpsguard_sshd_include_first() {
+ensure_hguard_sshd_include_first() {
   local begin_count end_count begin_line end_line existing_content content mode
 
   [ -f "$SSHD_CONFIG" ] || error "OpenSSH server config is missing: ${SSHD_CONFIG}"
@@ -1306,12 +1316,12 @@ ensure_vpsguard_sshd_include_first() {
   if ! end_count="$(grep -Fxc "$SSHD_INCLUDE_END" "$SSHD_CONFIG")"; then end_count=0; fi
   if { [ "$begin_count" -ne 0 ] || [ "$end_count" -ne 0 ]; } \
     && { [ "$begin_count" -ne 1 ] || [ "$end_count" -ne 1 ]; }; then
-    error "Refusing to modify malformed VPSGuard include markers in ${SSHD_CONFIG}."
+    error "Refusing to modify malformed Hguard include markers in ${SSHD_CONFIG}."
   fi
   if [ "$begin_count" -eq 1 ]; then
     begin_line="$(grep -Fn "$SSHD_INCLUDE_BEGIN" "$SSHD_CONFIG" | cut -d: -f1)"
     end_line="$(grep -Fn "$SSHD_INCLUDE_END" "$SSHD_CONFIG" | cut -d: -f1)"
-    [ "$begin_line" -lt "$end_line" ] || error "VPSGuard include markers are out of order in ${SSHD_CONFIG}."
+    [ "$begin_line" -lt "$end_line" ] || error "Hguard include markers are out of order in ${SSHD_CONFIG}."
   fi
 
   existing_content="$(awk -v begin="$SSHD_INCLUDE_BEGIN" -v end="$SSHD_INCLUDE_END" '
@@ -1320,7 +1330,7 @@ ensure_vpsguard_sshd_include_first() {
     !inside {print}
   ' "$SSHD_CONFIG")"
   content="${SSHD_INCLUDE_BEGIN}
-Include ${VPSGUARD_SSHD_CONFIG}
+Include ${HGUARD_SSHD_CONFIG}
 ${SSHD_INCLUDE_END}
 ${existing_content}
 "
@@ -1328,12 +1338,12 @@ ${existing_content}
   atomic_write "$SSHD_CONFIG" "$mode" "$content"
 }
 
-write_vpsguard_ssh_socket_override() {
+write_hguard_ssh_socket_override() {
   local keep_old_port="${1:-false}"
   local listen_lines content ipv6_available="false"
 
-  assert_managed_or_absent "$VPSGUARD_SSH_SOCKET_OVERRIDE"
-  [ -e "${VPSGUARD_PROC_ROOT}/net/if_inet6" ] && ipv6_available="true"
+  assert_managed_or_absent "$HGUARD_SSH_SOCKET_OVERRIDE"
+  [ -e "${HGUARD_PROC_ROOT}/net/if_inet6" ] && ipv6_available="true"
   listen_lines="ListenStream=0.0.0.0:${SSH_PORT}"
   if [ "$ipv6_available" = "true" ]; then
     listen_lines="${listen_lines}
@@ -1347,28 +1357,28 @@ ListenStream=0.0.0.0:${ORIGINAL_SSH_PORT}"
 ListenStream=[::]:${ORIGINAL_SSH_PORT}"
     fi
   fi
-  content="# Managed by VPSGuard ${VPSGUARD_VERSION}
+  content="# Managed by Hguard ${HGUARD_VERSION}
 [Socket]
 ListenStream=
 ${listen_lines}
 "
-  atomic_write "$VPSGUARD_SSH_SOCKET_OVERRIDE" 644 "$content"
+  atomic_write "$HGUARD_SSH_SOCKET_OVERRIDE" 644 "$content"
 }
 
-write_vpsguard_ssh_runtime_policy() {
+write_hguard_ssh_runtime_policy() {
   local keep_old_port="${1:-false}"
   local any_changed="false"
 
-  write_vpsguard_sshd_config "$keep_old_port"
+  write_hguard_sshd_config "$keep_old_port"
   [ "$ATOMIC_WRITE_CHANGED" = "true" ] && any_changed="true"
-  ensure_vpsguard_sshd_include_first
+  ensure_hguard_sshd_include_first
   [ "$ATOMIC_WRITE_CHANGED" = "true" ] && any_changed="true"
   detect_ssh_runtime_mode
   if [ "$SSH_RUNTIME_MODE" = "socket" ]; then
-    write_vpsguard_ssh_socket_override "$keep_old_port"
+    write_hguard_ssh_socket_override "$keep_old_port"
     [ "$ATOMIC_WRITE_CHANGED" = "true" ] && any_changed="true"
-  elif [ -f "$VPSGUARD_SSH_SOCKET_OVERRIDE" ] && head -n 1 "$VPSGUARD_SSH_SOCKET_OVERRIDE" | grep -Fq 'Managed by VPSGuard'; then
-    rm -f "$VPSGUARD_SSH_SOCKET_OVERRIDE"
+  elif [ -f "$HGUARD_SSH_SOCKET_OVERRIDE" ] && head -n 1 "$HGUARD_SSH_SOCKET_OVERRIDE" | grep -Fq 'Managed by Hguard'; then
+    rm -f "$HGUARD_SSH_SOCKET_OVERRIDE"
     any_changed="true"
   fi
   ATOMIC_WRITE_CHANGED="$any_changed"
@@ -1501,9 +1511,9 @@ configure_ssh_safely() {
   local answer=""
   local policy_changed
 
-  write_vpsguard_ssh_runtime_policy "$keep_old_port"
+  write_hguard_ssh_runtime_policy "$keep_old_port"
   policy_changed="$ATOMIC_WRITE_CHANGED"
-  verify_effective_sshd_config || error "Effective sshd configuration does not match the VPSGuard policy. SSH was not restarted."
+  verify_effective_sshd_config || error "Effective sshd configuration does not match the Hguard policy. SSH was not restarted."
   if [ "$policy_changed" = "true" ] || ! verify_ssh_listener "$SSH_PORT"; then
     apply_ssh_runtime || error "Failed to apply SSH configuration safely. Keep the current root session open."
   fi
@@ -1514,11 +1524,11 @@ configure_ssh_safely() {
   ufw_tcp_rule_exists "$SSH_PORT" || error "Target SSH port ${SSH_PORT}/tcp is not allowed by UFW."
 
   if [ "$PORT_MIGRATION_REQUIRED" != "true" ]; then
-    rm -f "$VPSGUARD_PENDING_PORT_MARKER"
+    rm -f "$HGUARD_PENDING_PORT_MARKER"
     return 0
   fi
 
-  atomic_write "$VPSGUARD_PENDING_PORT_MARKER" 600 "target=${SSH_PORT}
+  atomic_write "$HGUARD_PENDING_PORT_MARKER" 600 "target=${SSH_PORT}
 old=${ORIGINAL_SSH_PORT}
 "
   warn "New SSH port ${SSH_PORT} is listening locally. Old port ${ORIGINAL_SSH_PORT} remains listening and allowed until remote login is confirmed."
@@ -1537,7 +1547,7 @@ old=${ORIGINAL_SSH_PORT}
     return 0
   fi
 
-  write_vpsguard_ssh_runtime_policy false
+  write_hguard_ssh_runtime_policy false
   policy_changed="$ATOMIC_WRITE_CHANGED"
   verify_effective_sshd_config || error "Final SSH configuration validation failed; old UFW rule remains."
   if [ "$policy_changed" = "true" ] || ! verify_ssh_listener "$SSH_PORT"; then
@@ -1546,17 +1556,17 @@ old=${ORIGINAL_SSH_PORT}
   verify_ssh_listener "$SSH_PORT" || error "Target SSH listener disappeared during finalization; old UFW rule remains."
 
   if verify_ssh_listener "$ORIGINAL_SSH_PORT"; then
-    warn "Old SSH port ${ORIGINAL_SSH_PORT} is still being listened on after finalization. Check for another 'Port' directive in sshd_config or a drop-in outside VPSGuard's management."
+    warn "Old SSH port ${ORIGINAL_SSH_PORT} is still being listened on after finalization. Check for another 'Port' directive in sshd_config or a drop-in outside Hguard's management."
     INSTALL_STATUS="success-with-warnings"
   fi
 
-  if grep -Fxq "${ORIGINAL_SSH_PORT}/tcp" "$VPSGUARD_MANAGED_RULES" 2>/dev/null; then
+  if grep -Fxq "${ORIGINAL_SSH_PORT}/tcp" "$HGUARD_MANAGED_RULES" 2>/dev/null; then
     ufw --force delete allow "${ORIGINAL_SSH_PORT}/tcp"
     remove_managed_rule_record "${ORIGINAL_SSH_PORT}/tcp"
   else
-    warn "Old UFW rule ${ORIGINAL_SSH_PORT}/tcp predates VPSGuard and was preserved."
+    warn "Old UFW rule ${ORIGINAL_SSH_PORT}/tcp predates Hguard and was preserved."
   fi
-  rm -f "$VPSGUARD_PENDING_PORT_MARKER"
+  rm -f "$HGUARD_PENDING_PORT_MARKER"
   PORT_MIGRATION_REQUIRED="false"
 }
 
@@ -1605,7 +1615,7 @@ configure_fail2ban() {
   local content protected_ports ignoreip
   assert_managed_or_absent "$FAIL2BAN_JAIL"
   protected_ports="$SSH_PORT"
-  if [ -f "$VPSGUARD_PENDING_PORT_MARKER" ] && [ "$ORIGINAL_SSH_PORT" != "$SSH_PORT" ]; then
+  if [ -f "$HGUARD_PENDING_PORT_MARKER" ] && [ "$ORIGINAL_SSH_PORT" != "$SSH_PORT" ]; then
     protected_ports="${SSH_PORT},${ORIGINAL_SSH_PORT}"
   fi
 
@@ -1617,7 +1627,7 @@ configure_fail2ban() {
     warn "无法确定当前连接的来源 IP（SSH_CONNECTION 为空，who -m 也没有给出可用地址）；未将任何地址加入 fail2ban 白名单。"
   fi
 
-  content="# Managed by VPSGuard ${VPSGUARD_VERSION}
+  content="# Managed by Hguard ${HGUARD_VERSION}
 [sshd]
 enabled = true
 port = ${protected_ports}
@@ -1675,7 +1685,7 @@ write_bbr_files() {
   local sysctl_changed
 
   assert_managed_or_absent "$BBR_SYSCTL_FILE"
-  atomic_write "$BBR_SYSCTL_FILE" 644 "# Managed by VPSGuard ${VPSGUARD_VERSION}
+  atomic_write "$BBR_SYSCTL_FILE" 644 "# Managed by Hguard ${HGUARD_VERSION}
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 "
@@ -1690,24 +1700,24 @@ net.ipv4.tcp_congestion_control = bbr
   fi
   if [ "$module_persistence" = "true" ] || [ "$module_persistence" = "1" ]; then
     assert_managed_or_absent "$BBR_MODULES_FILE"
-    atomic_write "$BBR_MODULES_FILE" 644 "# Managed by VPSGuard ${VPSGUARD_VERSION}
+    atomic_write "$BBR_MODULES_FILE" 644 "# Managed by Hguard ${HGUARD_VERSION}
 tcp_bbr
 "
-  elif [ -f "$BBR_MODULES_FILE" ] && head -n 1 "$BBR_MODULES_FILE" | grep -Fq 'Managed by VPSGuard'; then
+  elif [ -f "$BBR_MODULES_FILE" ] && head -n 1 "$BBR_MODULES_FILE" | grep -Fq 'Managed by Hguard'; then
     rm -f "$BBR_MODULES_FILE"
   fi
   ATOMIC_WRITE_CHANGED="$sysctl_changed"
 }
 
 migrate_legacy_bbr_file() {
-  local legacy_file="${VPSGUARD_ETC_ROOT}/sysctl.d/99-bbr.conf"
+  local legacy_file="${HGUARD_ETC_ROOT}/sysctl.d/99-bbr.conf"
   local normalized
 
   [ -f "$legacy_file" ] || return 0
   normalized="$(awk 'NF && $1 !~ /^#/ {gsub(/[[:space:]]/, ""); print}' "$legacy_file")"
   if [ "$normalized" = $'net.core.default_qdisc=fq\nnet.ipv4.tcp_congestion_control=bbr' ]; then
     rm -f "$legacy_file"
-    info "Removed the exact legacy VPSGuard BBR file after migrating to ${BBR_SYSCTL_FILE}."
+    info "Removed the exact legacy Hguard BBR file after migrating to ${BBR_SYSCTL_FILE}."
   else
     warn "Preserved unrecognized legacy BBR file: ${legacy_file}"
   fi
@@ -1770,19 +1780,19 @@ read_first_line() {
 }
 
 conntrack_count_file() {
-  printf '%s/net/netfilter/nf_conntrack_count\n' "$VPSGUARD_PROC_SYS_ROOT"
+  printf '%s/net/netfilter/nf_conntrack_count\n' "$HGUARD_PROC_SYS_ROOT"
 }
 
 conntrack_max_file() {
-  printf '%s/net/netfilter/nf_conntrack_max\n' "$VPSGUARD_PROC_SYS_ROOT"
+  printf '%s/net/netfilter/nf_conntrack_max\n' "$HGUARD_PROC_SYS_ROOT"
 }
 
 conntrack_timeout_file() {
-  printf '%s/net/netfilter/nf_conntrack_tcp_timeout_%s\n' "$VPSGUARD_PROC_SYS_ROOT" "$1"
+  printf '%s/net/netfilter/nf_conntrack_tcp_timeout_%s\n' "$HGUARD_PROC_SYS_ROOT" "$1"
 }
 
 conntrack_hashsize_file() {
-  printf '%s/nf_conntrack/parameters/hashsize\n' "$VPSGUARD_SYS_MODULE_ROOT"
+  printf '%s/nf_conntrack/parameters/hashsize\n' "$HGUARD_SYS_MODULE_ROOT"
 }
 
 conntrack_profile_syn_sent_target() {
@@ -1832,8 +1842,8 @@ conntrack_usage_tenths() {
 conntrack_table_full_state() {
   local logs="" command_output
 
-  if [ -n "${VPSGUARD_CONNTRACK_LOG_TEXT+x}" ]; then
-    logs="$VPSGUARD_CONNTRACK_LOG_TEXT"
+  if [ -n "${HGUARD_CONNTRACK_LOG_TEXT+x}" ]; then
+    logs="$HGUARD_CONNTRACK_LOG_TEXT"
   else
     if command -v dmesg >/dev/null 2>&1 && command_output="$(dmesg 2>/dev/null)"; then
       logs="${logs}${command_output}
@@ -1847,7 +1857,7 @@ conntrack_table_full_state() {
 
   if printf '%s\n' "$logs" | grep -Fq 'nf_conntrack: table full, dropping packet'; then
     printf 'yes\n'
-  elif [ -n "$logs" ] || [ -n "${VPSGUARD_CONNTRACK_LOG_TEXT+x}" ]; then
+  elif [ -n "$logs" ] || [ -n "${HGUARD_CONNTRACK_LOG_TEXT+x}" ]; then
     printf 'no\n'
   else
     printf 'unknown\n'
@@ -1902,7 +1912,7 @@ print_conntrack_install_check() {
       if [ "$table_full" = "yes" ]; then
         warn "Conntrack table exhaustion was detected in accessible kernel logs; Linux has dropped packets before they reached applications."
       fi
-      warn "No conntrack kernel parameter was changed. Run 'sudo bash install.sh --optimize-conntrack' only if you explicitly want VPSGuard to apply its conservative conntrack profile."
+      warn "No conntrack kernel parameter was changed. Run 'sudo bash install.sh --optimize-conntrack' only if you explicitly want Hguard to apply its conservative conntrack profile."
       ;;
     *)
       warn "Conntrack health is unavailable on this kernel/container; continuing without changing conntrack settings."
@@ -1911,7 +1921,7 @@ print_conntrack_install_check() {
 }
 
 system_ram_mb() {
-  local meminfo="${VPSGUARD_PROC_ROOT}/meminfo"
+  local meminfo="${HGUARD_PROC_ROOT}/meminfo"
 
   [ -r "$meminfo" ] || { printf 'unknown\n'; return 0; }
   awk '$1 == "MemTotal:" {printf "%d\n", $2 / 1024; found=1} END {if (!found) print "unknown"}' "$meminfo"
@@ -1983,12 +1993,12 @@ foreign_conntrack_config_sources() {
   local sources=""
   local pattern='net.netfilter.nf_conntrack_|options[[:space:]]+nf_conntrack[[:space:]].*hashsize|nf_conntrack[[:space:]].*hashsize'
 
-  for file in "${VPSGUARD_ETC_ROOT}/sysctl.conf" "${VPSGUARD_ETC_ROOT}"/sysctl.d/*.conf "${VPSGUARD_ETC_ROOT}"/modprobe.d/*.conf; do
+  for file in "${HGUARD_ETC_ROOT}/sysctl.conf" "${HGUARD_ETC_ROOT}"/sysctl.d/*.conf "${HGUARD_ETC_ROOT}"/modprobe.d/*.conf; do
     [ -f "$file" ] || continue
     first_line="$(head -n 1 "$file" 2>/dev/null || printf '')"
     case "$file" in
       "$CONNTRACK_SYSCTL_FILE"|"$CONNTRACK_MODPROBE_FILE")
-        printf '%s\n' "$first_line" | grep -Fq 'Managed by VPSGuard' && continue
+        printf '%s\n' "$first_line" | grep -Fq 'Managed by Hguard' && continue
         ;;
     esac
     if grep -Eq "$pattern" "$file"; then
@@ -2004,10 +2014,10 @@ write_conntrack_helper_file() {
 
   assert_managed_or_absent "$CONNTRACK_HELPER_FILE"
   helper_content="#!/usr/bin/env bash
-# Managed by VPSGuard ${VPSGUARD_VERSION}; optional conntrack runtime floor.
+# Managed by Hguard ${HGUARD_VERSION}; optional conntrack runtime floor.
 set -euo pipefail
 
-PROC_SYS_ROOT=\"\${VPSGUARD_PROC_SYS_ROOT:-/proc/sys}\"
+PROC_SYS_ROOT=\"\${HGUARD_PROC_SYS_ROOT:-/proc/sys}\"
 MAX_FILE=\"\${PROC_SYS_ROOT}/net/netfilter/nf_conntrack_max\"
 SYN_SENT_FILE=\"\${PROC_SYS_ROOT}/net/netfilter/nf_conntrack_tcp_timeout_syn_sent\"
 SYN_RECV_FILE=\"\${PROC_SYS_ROOT}/net/netfilter/nf_conntrack_tcp_timeout_syn_recv\"
@@ -2045,23 +2055,23 @@ write_conntrack_files() {
   assert_managed_or_absent "$CONNTRACK_MODPROBE_FILE"
   assert_managed_or_absent "$CONNTRACK_MODULES_FILE"
   assert_managed_or_absent "$CONNTRACK_SERVICE_FILE"
-  sysctl_content="# Managed by VPSGuard ${VPSGUARD_VERSION}; optional conntrack timeout profile.
+  sysctl_content="# Managed by Hguard ${HGUARD_VERSION}; optional conntrack timeout profile.
 # nf_conntrack is loaded early through ${CONNTRACK_MODULES_FILE} so systemd-sysctl can see these keys.
 # Netfilter conntrack timeouts; these are not TCP socket TIME_WAIT settings.
 net.netfilter.nf_conntrack_tcp_timeout_syn_sent = $(conntrack_profile_syn_sent_target)
 net.netfilter.nf_conntrack_tcp_timeout_syn_recv = $(conntrack_profile_syn_recv_target)
 net.netfilter.nf_conntrack_tcp_timeout_time_wait = $(conntrack_profile_time_wait_target)
 "
-  modprobe_content="# Managed by VPSGuard ${VPSGUARD_VERSION}; applies when nf_conntrack is next loaded.
+  modprobe_content="# Managed by Hguard ${HGUARD_VERSION}; applies when nf_conntrack is next loaded.
 options nf_conntrack hashsize=${target_hashsize}
 "
-  modules_content="# Managed by VPSGuard ${VPSGUARD_VERSION}; load conntrack before systemd-sysctl.
+  modules_content="# Managed by Hguard ${HGUARD_VERSION}; load conntrack before systemd-sysctl.
 nf_conntrack
 "
-  service_content="# Managed by VPSGuard ${VPSGUARD_VERSION}; optional conntrack runtime floor.
+  service_content="# Managed by Hguard ${HGUARD_VERSION}; optional conntrack runtime floor.
 [Unit]
-Description=Apply VPSGuard conntrack runtime profile
-Documentation=https://github.com/hcloudlab/vpsguard
+Description=Apply Hguard conntrack runtime profile
+Documentation=https://github.com/hcloudlab/Hguard
 DefaultDependencies=no
 Wants=systemd-modules-load.service
 After=systemd-modules-load.service systemd-sysctl.service
@@ -2102,8 +2112,8 @@ apply_conntrack_runtime_values() {
   # applies the hashsize floor at runtime (hashsize has no sysctl key).
   [ "$files_changed" = "true" ] || return 0
 
-  if [ "$VPSGUARD_TEST_MODE" = "1" ]; then
-    VPSGUARD_PROC_SYS_ROOT="$VPSGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE" || true
+  if [ "$HGUARD_TEST_MODE" = "1" ]; then
+    HGUARD_PROC_SYS_ROOT="$HGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE" || true
     [ ! -e "$(conntrack_hashsize_file)" ] || printf '%s\n' "$target_hashsize" > "$(conntrack_hashsize_file)" 2>/dev/null || true
     return 0
   fi
@@ -2131,7 +2141,7 @@ apply_conntrack_runtime_values() {
 }
 
 enable_conntrack_service() {
-  if [ "$VPSGUARD_TEST_MODE" = "1" ]; then
+  if [ "$HGUARD_TEST_MODE" = "1" ]; then
     return 0
   fi
   if ! command -v systemctl >/dev/null 2>&1; then
@@ -2154,12 +2164,12 @@ optimize_conntrack() {
   foreign_sources="$(foreign_conntrack_config_sources)"
   if [ -n "$foreign_sources" ]; then
     foreign_count="$(printf '%s\n' "$foreign_sources" | awk 'NF {count++} END {print count + 0}')"
-    warn "Existing conntrack configuration detected outside VPSGuard:"
+    warn "Existing conntrack configuration detected outside Hguard:"
     printf '%s\n' "$foreign_sources" | sed 's/^/  - /'
     if [ "$foreign_count" -gt 1 ]; then
       warn "Multiple conntrack configuration sources detected."
     fi
-    warn "No VPSGuard conntrack file was written; user-owned kernel configuration was preserved."
+    warn "No Hguard conntrack file was written; user-owned kernel configuration was preserved."
     return 0
   fi
 
@@ -2173,10 +2183,10 @@ optimize_conntrack() {
   fi
   apply_conntrack_runtime_values "$target_hash" "$conntrack_files_changed"
   if [ "$conntrack_files_changed" = "true" ]; then
-    info "Applied VPSGuard conntrack profile: max floor=65536, hashsize floor=${target_hash}, syn_sent=$(conntrack_profile_syn_sent_target), syn_recv=$(conntrack_profile_syn_recv_target), time_wait=$(conntrack_profile_time_wait_target), RAM=${ram_mb}MB."
+    info "Applied Hguard conntrack profile: max floor=65536, hashsize floor=${target_hash}, syn_sent=$(conntrack_profile_syn_sent_target), syn_recv=$(conntrack_profile_syn_recv_target), time_wait=$(conntrack_profile_time_wait_target), RAM=${ram_mb}MB."
     warn "hashsize persistence depends on nf_conntrack reload/reboot; verify after reboot with status.sh."
   else
-    info "VPSGuard conntrack profile already active; no changes needed (max floor=65536, hashsize floor=${target_hash})."
+    info "Hguard conntrack profile already active; no changes needed (max floor=65536, hashsize floor=${target_hash})."
   fi
   print_conntrack_install_check
 }
@@ -2208,8 +2218,8 @@ verify_ssh_runtime_healthy() {
 
 verify_config_permissions() {
   local owner mode
-  if ! owner="$(stat -c '%U:%G' "$VPSGUARD_CONFIG_FILE" 2>/dev/null)"; then owner=""; fi
-  if ! mode="$(stat -c '%a' "$VPSGUARD_CONFIG_FILE" 2>/dev/null)"; then mode=""; fi
+  if ! owner="$(stat -c '%U:%G' "$HGUARD_CONFIG_FILE" 2>/dev/null)"; then owner=""; fi
+  if ! mode="$(stat -c '%a' "$HGUARD_CONFIG_FILE" 2>/dev/null)"; then mode=""; fi
   [ "$owner" = "root:root" ] && [ "$mode" = "600" ]
 }
 
@@ -2225,7 +2235,7 @@ run_final_acceptance() {
   verify_ssh_listener "$SSH_PORT" || { warn "Acceptance: target SSH listener missing."; failures=$((failures + 1)); }
   ufw_is_active || { warn "Acceptance: UFW is inactive."; failures=$((failures + 1)); }
   ufw_tcp_rule_exists "$SSH_PORT" || { warn "Acceptance: target UFW rule missing."; failures=$((failures + 1)); }
-  verify_config_permissions || { warn "Acceptance: VPSGuard config ownership or mode is invalid."; failures=$((failures + 1)); }
+  verify_config_permissions || { warn "Acceptance: Hguard config ownership or mode is invalid."; failures=$((failures + 1)); }
   if command -v systemctl >/dev/null 2>&1; then
     systemctl is-active --quiet fail2ban.service || { warn "Acceptance: fail2ban service is inactive."; failures=$((failures + 1)); }
   fi
@@ -2249,7 +2259,7 @@ run_final_acceptance() {
     warn "Previous managed user ${PREVIOUS_MANAGED_USER} still exists and was not deleted. Review its access manually."
   fi
   write_config_env
-  atomic_write "$VPSGUARD_INSTALLED_MARKER" 600 "${INSTALL_STATUS}
+  atomic_write "$HGUARD_INSTALLED_MARKER" 600 "${INSTALL_STATUS}
 "
 }
 
@@ -2296,7 +2306,7 @@ print_final_summary() {
   display_ip="$(printf '%s\n' "$resolved" | head -n1)"
   display_hint="$(printf '%s\n' "$resolved" | tail -n +2)"
 
-  printf '\n%bVPSGuard %s acceptance completed%b\n' "$BOLD" "$VPSGUARD_VERSION" "$NC"
+  printf '\n%bHguard %s acceptance completed%b\n' "$BOLD" "$HGUARD_VERSION" "$NC"
   printf 'Install status: %s\n' "$INSTALL_STATUS"
   printf 'Managed user: %s\n' "$NEW_USER"
   printf 'Sudo mode: %s\n' "$SUDO_MODE"
@@ -2307,9 +2317,9 @@ print_final_summary() {
   [ -z "$display_hint" ] || printf '%b%s%b\n' "$YELLOW" "$display_hint" "$NC"
   printf '%bDo not close the current session until remote login and sudo are verified.%b\n' "$YELLOW" "$NC"
   if [ "$INSTALL_STATUS" = "pending-port-finalization" ]; then
-    warn "Old SSH port ${ORIGINAL_SSH_PORT} is intentionally retained. Rerun VPSGuard after remote validation to finalize."
+    warn "Old SSH port ${ORIGINAL_SSH_PORT} is intentionally retained. Rerun Hguard after remote validation to finalize."
   fi
-  if [ -f "${VPSGUARD_RUN_ROOT}/reboot-required" ]; then
+  if [ -f "${HGUARD_RUN_ROOT}/reboot-required" ]; then
     warn "系统更新需要重启才能完全生效，确认新管理员登录正常后再手动重启。"
   fi
   if [ -n "$INSTALLER_IP" ]; then
@@ -2318,7 +2328,7 @@ print_final_summary() {
 }
 
 remove_legacy_phase_markers() {
-  rm -f "${VPSGUARD_STATE_DIR}/.ssh_done" "${VPSGUARD_STATE_DIR}/.sudo_done" "${VPSGUARD_STATE_DIR}/.ufw_done"
+  rm -f "${HGUARD_STATE_DIR}/.ssh_done" "${HGUARD_STATE_DIR}/.sudo_done" "${HGUARD_STATE_DIR}/.ufw_done"
 }
 
 main() {
@@ -2326,12 +2336,12 @@ main() {
   require_root
   check_ubuntu_lts
   if [ "$OPTIMIZE_CONNTRACK" = "true" ]; then
-    ensure_directory "$VPSGUARD_STATE_DIR" 700
+    ensure_directory "$HGUARD_STATE_DIR" 700
     record_preinstall_state
     optimize_conntrack
     return 0
   fi
-  ensure_directory "$VPSGUARD_STATE_DIR" 700
+  ensure_directory "$HGUARD_STATE_DIR" 700
   prepare_sshd_runtime_directory
   resolve_managed_user
   resolve_sudo_mode
@@ -2367,6 +2377,6 @@ main() {
   print_final_summary
 }
 
-if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+if [ "$HGUARD_TEST_MODE" != "1" ] && [ "$HGUARD_LIB_MODE" != "1" ]; then
   main "$@"
 fi

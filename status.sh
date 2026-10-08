@@ -1,29 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VPSGUARD_VERSION="0.3.7"
-VPSGUARD_TEST_MODE="${VPSGUARD_TEST_MODE:-0}"
-VPSGUARD_PROC_ROOT="${VPSGUARD_PROC_ROOT:-/proc}"
-VPSGUARD_PROC_SYS_ROOT="${VPSGUARD_PROC_SYS_ROOT:-${VPSGUARD_PROC_ROOT}/sys}"
-VPSGUARD_SYS_MODULE_ROOT="${VPSGUARD_SYS_MODULE_ROOT:-/sys/module}"
-VPSGUARD_ETC_ROOT="${VPSGUARD_ETC_ROOT:-/etc}"
-VPSGUARD_STATE_DIR="${VPSGUARD_STATE_DIR:-${VPSGUARD_ETC_ROOT}/vpsguard}"
-VPSGUARD_CONFIG_FILE="${VPSGUARD_CONFIG_FILE:-${VPSGUARD_STATE_DIR}/config.env}"
-VPSGUARD_STATE_FILE="${VPSGUARD_STATE_FILE:-${VPSGUARD_STATE_DIR}/state.env}"
-VPSGUARD_INSTALLED_MARKER="${VPSGUARD_INSTALLED_MARKER:-${VPSGUARD_STATE_DIR}/.installed}"
-VPSGUARD_PENDING_PORT_MARKER="${VPSGUARD_PENDING_PORT_MARKER:-${VPSGUARD_STATE_DIR}/.pending-port-finalization}"
-VPSGUARD_SSHD_CONFIG="${VPSGUARD_SSHD_CONFIG:-${VPSGUARD_ETC_ROOT}/ssh/sshd_config.d/00-vpsguard.conf}"
-SYSTEMD_SYSTEM_DIR="${SYSTEMD_SYSTEM_DIR:-${VPSGUARD_ETC_ROOT}/systemd/system}"
-VPSGUARD_SSH_SOCKET_OVERRIDE="${VPSGUARD_SSH_SOCKET_OVERRIDE:-${SYSTEMD_SYSTEM_DIR}/ssh.socket.d/00-vpsguard.conf}"
-FAIL2BAN_JAIL="${FAIL2BAN_JAIL:-${VPSGUARD_ETC_ROOT}/fail2ban/jail.d/vpsguard-sshd.local}"
-SUDOERS_DIR="${SUDOERS_DIR:-${VPSGUARD_ETC_ROOT}/sudoers.d}"
-BBR_SYSCTL_FILE="${BBR_SYSCTL_FILE:-${VPSGUARD_ETC_ROOT}/sysctl.d/99-vpsguard-bbr.conf}"
-BBR_MODULES_FILE="${BBR_MODULES_FILE:-${VPSGUARD_ETC_ROOT}/modules-load.d/vpsguard-bbr.conf}"
-CONNTRACK_SYSCTL_FILE="${CONNTRACK_SYSCTL_FILE:-${VPSGUARD_ETC_ROOT}/sysctl.d/99-vpsguard-conntrack.conf}"
-CONNTRACK_MODPROBE_FILE="${CONNTRACK_MODPROBE_FILE:-${VPSGUARD_ETC_ROOT}/modprobe.d/vpsguard-nf-conntrack.conf}"
-CONNTRACK_MODULES_FILE="${CONNTRACK_MODULES_FILE:-${VPSGUARD_ETC_ROOT}/modules-load.d/vpsguard-conntrack.conf}"
-CONNTRACK_HELPER_FILE="${CONNTRACK_HELPER_FILE:-${VPSGUARD_STATE_DIR}/apply-conntrack-profile.sh}"
-CONNTRACK_SERVICE_NAME="${CONNTRACK_SERVICE_NAME:-vpsguard-conntrack.service}"
+HGUARD_VERSION="0.4.0"
+HGUARD_TEST_MODE="${HGUARD_TEST_MODE:-0}"
+HGUARD_PROC_ROOT="${HGUARD_PROC_ROOT:-/proc}"
+HGUARD_PROC_SYS_ROOT="${HGUARD_PROC_SYS_ROOT:-${HGUARD_PROC_ROOT}/sys}"
+HGUARD_SYS_MODULE_ROOT="${HGUARD_SYS_MODULE_ROOT:-/sys/module}"
+HGUARD_ETC_ROOT="${HGUARD_ETC_ROOT:-/etc}"
+HGUARD_STATE_DIR="${HGUARD_STATE_DIR:-${HGUARD_ETC_ROOT}/hguard}"
+HGUARD_CONFIG_FILE="${HGUARD_CONFIG_FILE:-${HGUARD_STATE_DIR}/config.env}"
+HGUARD_STATE_FILE="${HGUARD_STATE_FILE:-${HGUARD_STATE_DIR}/state.env}"
+HGUARD_INSTALLED_MARKER="${HGUARD_INSTALLED_MARKER:-${HGUARD_STATE_DIR}/.installed}"
+HGUARD_PENDING_PORT_MARKER="${HGUARD_PENDING_PORT_MARKER:-${HGUARD_STATE_DIR}/.pending-port-finalization}"
+HGUARD_SSHD_CONFIG="${HGUARD_SSHD_CONFIG:-${HGUARD_ETC_ROOT}/ssh/sshd_config.d/00-hguard.conf}"
+SYSTEMD_SYSTEM_DIR="${SYSTEMD_SYSTEM_DIR:-${HGUARD_ETC_ROOT}/systemd/system}"
+HGUARD_SSH_SOCKET_OVERRIDE="${HGUARD_SSH_SOCKET_OVERRIDE:-${SYSTEMD_SYSTEM_DIR}/ssh.socket.d/00-hguard.conf}"
+FAIL2BAN_JAIL="${FAIL2BAN_JAIL:-${HGUARD_ETC_ROOT}/fail2ban/jail.d/hguard-sshd.local}"
+SUDOERS_DIR="${SUDOERS_DIR:-${HGUARD_ETC_ROOT}/sudoers.d}"
+BBR_SYSCTL_FILE="${BBR_SYSCTL_FILE:-${HGUARD_ETC_ROOT}/sysctl.d/99-hguard-bbr.conf}"
+BBR_MODULES_FILE="${BBR_MODULES_FILE:-${HGUARD_ETC_ROOT}/modules-load.d/hguard-bbr.conf}"
+CONNTRACK_SYSCTL_FILE="${CONNTRACK_SYSCTL_FILE:-${HGUARD_ETC_ROOT}/sysctl.d/99-hguard-conntrack.conf}"
+CONNTRACK_MODPROBE_FILE="${CONNTRACK_MODPROBE_FILE:-${HGUARD_ETC_ROOT}/modprobe.d/hguard-nf-conntrack.conf}"
+CONNTRACK_MODULES_FILE="${CONNTRACK_MODULES_FILE:-${HGUARD_ETC_ROOT}/modules-load.d/hguard-conntrack.conf}"
+CONNTRACK_HELPER_FILE="${CONNTRACK_HELPER_FILE:-${HGUARD_STATE_DIR}/apply-conntrack-profile.sh}"
+CONNTRACK_SERVICE_NAME="${CONNTRACK_SERVICE_NAME:-hguard-conntrack.service}"
 CONNTRACK_SERVICE_FILE="${CONNTRACK_SERVICE_FILE:-${SYSTEMD_SYSTEM_DIR}/${CONNTRACK_SERVICE_NAME}}"
 
 GREEN="\033[32m"
@@ -70,19 +70,19 @@ read_first_line() {
 }
 
 conntrack_count_file() {
-  printf '%s/net/netfilter/nf_conntrack_count\n' "$VPSGUARD_PROC_SYS_ROOT"
+  printf '%s/net/netfilter/nf_conntrack_count\n' "$HGUARD_PROC_SYS_ROOT"
 }
 
 conntrack_max_file() {
-  printf '%s/net/netfilter/nf_conntrack_max\n' "$VPSGUARD_PROC_SYS_ROOT"
+  printf '%s/net/netfilter/nf_conntrack_max\n' "$HGUARD_PROC_SYS_ROOT"
 }
 
 conntrack_hashsize_file() {
-  printf '%s/nf_conntrack/parameters/hashsize\n' "$VPSGUARD_SYS_MODULE_ROOT"
+  printf '%s/nf_conntrack/parameters/hashsize\n' "$HGUARD_SYS_MODULE_ROOT"
 }
 
 conntrack_timeout_file() {
-  printf '%s/net/netfilter/nf_conntrack_tcp_timeout_%s\n' "$VPSGUARD_PROC_SYS_ROOT" "$1"
+  printf '%s/net/netfilter/nf_conntrack_tcp_timeout_%s\n' "$HGUARD_PROC_SYS_ROOT" "$1"
 }
 
 conntrack_profile_syn_sent_target() {
@@ -132,8 +132,8 @@ conntrack_usage_tenths() {
 conntrack_table_full_state() {
   local logs="" command_output
 
-  if [ -n "${VPSGUARD_CONNTRACK_LOG_TEXT+x}" ]; then
-    logs="$VPSGUARD_CONNTRACK_LOG_TEXT"
+  if [ -n "${HGUARD_CONNTRACK_LOG_TEXT+x}" ]; then
+    logs="$HGUARD_CONNTRACK_LOG_TEXT"
   else
     if command -v dmesg >/dev/null 2>&1 && command_output="$(dmesg 2>/dev/null)"; then
       logs="${logs}${command_output}
@@ -147,7 +147,7 @@ conntrack_table_full_state() {
 
   if printf '%s\n' "$logs" | grep -Fq 'nf_conntrack: table full, dropping packet'; then
     printf 'yes\n'
-  elif [ -n "$logs" ] || [ -n "${VPSGUARD_CONNTRACK_LOG_TEXT+x}" ]; then
+  elif [ -n "$logs" ] || [ -n "${HGUARD_CONNTRACK_LOG_TEXT+x}" ]; then
     printf 'no\n'
   else
     printf 'unknown\n'
@@ -388,7 +388,7 @@ sudo_policy_has_full_admin_from_text() {
 
 managed_file_is_owned() {
   local file="$1"
-  [ -f "$file" ] && head -n 1 "$file" | grep -Eq '^# Managed by VPSGuard( |$)'
+  [ -f "$file" ] && head -n 1 "$file" | grep -Eq '^# Managed by Hguard( |$)'
 }
 
 passwordless_sudo_effective_for_user() {
@@ -402,7 +402,7 @@ passwordless_sudo_effective_for_user() {
 configured_sudo_mode() {
   local value
 
-  if ! value="$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE 2>/dev/null)"; then
+  if ! value="$(read_env_value "$HGUARD_CONFIG_FILE" SUDO_MODE 2>/dev/null)"; then
     printf 'unverified\n'
     return 0
   fi
@@ -420,22 +420,22 @@ main() {
   local client_address host_context effective_socket_listeners port_finalization
 
   if [ "$(id -u)" -ne 0 ]; then
-    printf 'Please run status.sh as root so it can read protected VPSGuard state.\n' >&2
+    printf 'Please run status.sh as root so it can read protected Hguard state.\n' >&2
     exit 1
   fi
 
-  if ! managed_user="$(read_env_value "$VPSGUARD_CONFIG_FILE" NEW_USER 2>/dev/null)"; then managed_user=""; fi
-  if ! ssh_port="$(read_env_value "$VPSGUARD_CONFIG_FILE" SSH_PORT 2>/dev/null)"; then ssh_port=""; fi
-  if ! original_port="$(read_env_value "$VPSGUARD_CONFIG_FILE" ORIGINAL_SSH_PORT 2>/dev/null)"; then original_port=""; fi
-  if ! install_status="$(read_env_value "$VPSGUARD_CONFIG_FILE" INSTALL_STATUS 2>/dev/null)"; then install_status=""; fi
+  if ! managed_user="$(read_env_value "$HGUARD_CONFIG_FILE" NEW_USER 2>/dev/null)"; then managed_user=""; fi
+  if ! ssh_port="$(read_env_value "$HGUARD_CONFIG_FILE" SSH_PORT 2>/dev/null)"; then ssh_port=""; fi
+  if ! original_port="$(read_env_value "$HGUARD_CONFIG_FILE" ORIGINAL_SSH_PORT 2>/dev/null)"; then original_port=""; fi
+  if ! install_status="$(read_env_value "$HGUARD_CONFIG_FILE" INSTALL_STATUS 2>/dev/null)"; then install_status=""; fi
   sudo_mode="$(configured_sudo_mode)"
 
-  section "VPSGuard"
-  printf 'Version: %s\n' "$VPSGUARD_VERSION"
+  section "Hguard"
+  printf 'Version: %s\n' "$HGUARD_VERSION"
   printf 'Install status: %s\n' "${install_status:-not-configured}"
-  printf 'Installed marker: %s\n' "$([ -f "$VPSGUARD_INSTALLED_MARKER" ] && printf present || printf missing)"
-  printf 'Config: %s\n' "$VPSGUARD_CONFIG_FILE"
-  printf 'State: %s\n' "$VPSGUARD_STATE_FILE"
+  printf 'Installed marker: %s\n' "$([ -f "$HGUARD_INSTALLED_MARKER" ] && printf present || printf missing)"
+  printf 'Config: %s\n' "$HGUARD_CONFIG_FILE"
+  printf 'State: %s\n' "$HGUARD_STATE_FILE"
 
   section "Managed administrator"
   printf 'Username: %s\n' "${managed_user:-not-configured}"
@@ -443,7 +443,7 @@ main() {
     user_home="$(printf '%s\n' "$user_entry" | awk -F: '{print $6}')"
     user_shell="$(printf '%s\n' "$user_entry" | awk -F: '{print $7}')"
     authorized_keys="${user_home}/.ssh/authorized_keys"
-    sudoers_file="${SUDOERS_DIR}/vpsguard-${managed_user}"
+    sudoers_file="${SUDOERS_DIR}/hguard-${managed_user}"
     ok "User exists"
     printf 'Home: %s\nShell: %s\n' "$user_home" "$user_shell"
     if [ -s "$authorized_keys" ]; then
@@ -537,8 +537,8 @@ main() {
   printf 'PermitRootLogin: %s\n' "$(sshd_value "$effective_sshd" permitrootlogin)"
   printf 'PasswordAuthentication: %s\n' "$(sshd_value "$effective_sshd" passwordauthentication)"
   printf 'PubkeyAuthentication: %s\n' "$(sshd_value "$effective_sshd" pubkeyauthentication)"
-  printf 'Managed SSH snippet: %s\n' "$([ -f "$VPSGUARD_SSHD_CONFIG" ] && printf present || printf missing)"
-  printf 'Managed ssh.socket override: %s\n' "$([ -f "$VPSGUARD_SSH_SOCKET_OVERRIDE" ] && printf present || printf missing)"
+  printf 'Managed SSH snippet: %s\n' "$([ -f "$HGUARD_SSHD_CONFIG" ] && printf present || printf missing)"
+  printf 'Managed ssh.socket override: %s\n' "$([ -f "$HGUARD_SSH_SOCKET_OVERRIDE" ] && printf present || printf missing)"
   effective_socket_listeners=""
   if [ "$ssh_socket_state" = "active" ] && command -v systemctl >/dev/null 2>&1; then
     if ! effective_socket_listeners="$(systemctl show ssh.socket --property=Listen --value 2>/dev/null)"; then
@@ -550,8 +550,8 @@ main() {
     "$ssh_port" \
     "$original_port" \
     "$listeners" \
-    "$([ -f "$VPSGUARD_SSHD_CONFIG" ] && printf present || printf missing)" \
-    "$([ -f "$VPSGUARD_PENDING_PORT_MARKER" ] && printf present || printf missing)")"
+    "$([ -f "$HGUARD_SSHD_CONFIG" ] && printf present || printf missing)" \
+    "$([ -f "$HGUARD_PENDING_PORT_MARKER" ] && printf present || printf missing)")"
   printf 'Port finalization: %s\n' "$port_finalization"
   if sshd -t >/dev/null 2>&1; then
     printf 'sshd syntax: valid\n'
@@ -579,7 +579,7 @@ main() {
 
   section "fail2ban"
   printf 'Service: %s\n' "$(service_state fail2ban.service)"
-  printf 'VPSGuard jail file: %s\n' "$([ -f "$FAIL2BAN_JAIL" ] && printf present || printf missing)"
+  printf 'Hguard jail file: %s\n' "$([ -f "$FAIL2BAN_JAIL" ] && printf present || printf missing)"
   if fail2ban-client status sshd >/dev/null 2>&1; then
     printf 'sshd jail: active\n'
   else
@@ -604,6 +604,6 @@ main() {
   print_conntrack_status
 }
 
-if [ "$VPSGUARD_TEST_MODE" != "1" ]; then
+if [ "$HGUARD_TEST_MODE" != "1" ]; then
   main "$@"
 fi

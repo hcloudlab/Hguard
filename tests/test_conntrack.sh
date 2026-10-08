@@ -6,22 +6,22 @@ set -euo pipefail
 
 temporary_root="$(mktemp -d)"
 trap 'rm -rf "$temporary_root"' EXIT
-export VPSGUARD_TEST_MODE=1
-export VPSGUARD_PROC_ROOT="$temporary_root/proc"
-export VPSGUARD_PROC_SYS_ROOT="$temporary_root/proc/sys"
-export VPSGUARD_SYS_MODULE_ROOT="$temporary_root/sys/module"
-export VPSGUARD_ETC_ROOT="$temporary_root/etc"
-export VPSGUARD_STATE_DIR="$temporary_root/etc/vpsguard"
-export VPSGUARD_STATE_FILE="$VPSGUARD_STATE_DIR/state.env"
-export VPSGUARD_MANAGED_RULES="$VPSGUARD_STATE_DIR/managed-rules"
-export CONNTRACK_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-vpsguard-conntrack.conf"
-export CONNTRACK_MODPROBE_FILE="$temporary_root/etc/modprobe.d/vpsguard-nf-conntrack.conf"
-export CONNTRACK_MODULES_FILE="$temporary_root/etc/modules-load.d/vpsguard-conntrack.conf"
-export CONNTRACK_HELPER_FILE="$temporary_root/etc/vpsguard/apply-conntrack-profile.sh"
-export CONNTRACK_SERVICE_FILE="$temporary_root/etc/systemd/system/vpsguard-conntrack.service"
-export VPSGUARD_CONNTRACK_LOG_TEXT=""
+export HGUARD_TEST_MODE=1
+export HGUARD_PROC_ROOT="$temporary_root/proc"
+export HGUARD_PROC_SYS_ROOT="$temporary_root/proc/sys"
+export HGUARD_SYS_MODULE_ROOT="$temporary_root/sys/module"
+export HGUARD_ETC_ROOT="$temporary_root/etc"
+export HGUARD_STATE_DIR="$temporary_root/etc/hguard"
+export HGUARD_STATE_FILE="$HGUARD_STATE_DIR/state.env"
+export HGUARD_MANAGED_RULES="$HGUARD_STATE_DIR/managed-rules"
+export CONNTRACK_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-hguard-conntrack.conf"
+export CONNTRACK_MODPROBE_FILE="$temporary_root/etc/modprobe.d/hguard-nf-conntrack.conf"
+export CONNTRACK_MODULES_FILE="$temporary_root/etc/modules-load.d/hguard-conntrack.conf"
+export CONNTRACK_HELPER_FILE="$temporary_root/etc/hguard/apply-conntrack-profile.sh"
+export CONNTRACK_SERVICE_FILE="$temporary_root/etc/systemd/system/hguard-conntrack.service"
+export HGUARD_CONNTRACK_LOG_TEXT=""
 
-mkdir -p "$VPSGUARD_PROC_SYS_ROOT/net/netfilter" "$VPSGUARD_SYS_MODULE_ROOT/nf_conntrack/parameters" "$temporary_root/proc"
+mkdir -p "$HGUARD_PROC_SYS_ROOT/net/netfilter" "$HGUARD_SYS_MODULE_ROOT/nf_conntrack/parameters" "$temporary_root/proc"
 printf '1024\n' > "$temporary_root/proc/meminfo"
 
 # shellcheck source=install.sh
@@ -46,9 +46,9 @@ assert_equal '0.3' "$(conntrack_usage_percent 100 32768)" "normal usage percent"
 assert_equal NOTICE "$(classify_conntrack_health 19661 32768 no)" "notice conntrack health"
 assert_equal WARNING "$(classify_conntrack_health 26215 32768 no)" "warning conntrack health"
 assert_equal CRITICAL "$(classify_conntrack_health 29492 32768 no)" "critical conntrack health"
-VPSGUARD_CONNTRACK_LOG_TEXT='nf_conntrack: table full, dropping packet'
+HGUARD_CONNTRACK_LOG_TEXT='nf_conntrack: table full, dropping packet'
 assert_equal CRITICAL "$(classify_conntrack_health 100 65536 "$(conntrack_table_full_state)")" "table full overrides low usage"
-VPSGUARD_CONNTRACK_LOG_TEXT=""
+HGUARD_CONNTRACK_LOG_TEXT=""
 
 rm -f "$(conntrack_count_file)"
 fields="$(conntrack_status_fields)"
@@ -87,8 +87,8 @@ assert_equal "$first_checksum" "$(cksum "$CONNTRACK_SYSCTL_FILE" "$CONNTRACK_MOD
 # A rerun with unchanged files and an already-active runtime profile must
 # not reapply anything or claim it did - real-world testing on an already-
 # optimized machine showed "Updated nf_conntrack hashsize at runtime" and
-# "Applied VPSGuard conntrack profile" on every single rerun.
-if grep -q 'Updated nf_conntrack hashsize at runtime\|Applied VPSGuard conntrack profile' "$rerun_output_file"; then
+# "Applied Hguard conntrack profile" on every single rerun.
+if grep -q 'Updated nf_conntrack hashsize at runtime\|Applied Hguard conntrack profile' "$rerun_output_file"; then
   fail "a no-op rerun must not reapply the conntrack profile or claim it did: $(cat "$rerun_output_file")"
 fi
 
@@ -110,18 +110,18 @@ printf '120\n' > "$(conntrack_timeout_file syn_sent)"
 printf '60\n' > "$(conntrack_timeout_file syn_recv)"
 printf '120\n' > "$(conntrack_timeout_file time_wait)"
 assert_equal 'drift detected' "$(conntrack_runtime_profile_state)" "timeout drift is detected"
-VPSGUARD_PROC_SYS_ROOT="$VPSGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE"
+HGUARD_PROC_SYS_ROOT="$HGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE"
 assert_equal active "$(conntrack_runtime_profile_state)" "restart-equivalent helper apply fixes timeout drift"
-VPSGUARD_PROC_SYS_ROOT="$VPSGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE"
+HGUARD_PROC_SYS_ROOT="$HGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE"
 assert_equal active "$(conntrack_runtime_profile_state)" "helper remains idempotent after restart-equivalent apply"
 
 printf '8192\n' > "$(conntrack_max_file)"
-VPSGUARD_PROC_SYS_ROOT="$VPSGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE"
+HGUARD_PROC_SYS_ROOT="$HGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE"
 assert_equal 65536 "$(cat "$(conntrack_max_file)")" "helper raises 8192 max to floor"
-VPSGUARD_PROC_SYS_ROOT="$VPSGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE"
+HGUARD_PROC_SYS_ROOT="$HGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE"
 assert_equal 65536 "$(cat "$(conntrack_max_file)")" "helper preserves 65536 max"
 printf '131072\n' > "$(conntrack_max_file)"
-VPSGUARD_PROC_SYS_ROOT="$VPSGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE"
+HGUARD_PROC_SYS_ROOT="$HGUARD_PROC_SYS_ROOT" bash "$CONNTRACK_HELPER_FILE"
 assert_equal 131072 "$(cat "$(conntrack_max_file)")" "helper preserves 131072 max"
 
 custom_sysctl="$temporary_root/etc/sysctl.d/custom.conf"
@@ -129,10 +129,10 @@ mkdir -p "$(dirname "$custom_sysctl")"
 printf 'net.netfilter.nf_conntrack_max=131072\n' > "$custom_sysctl"
 rm -f "$CONNTRACK_SYSCTL_FILE" "$CONNTRACK_MODPROBE_FILE" "$CONNTRACK_MODULES_FILE" "$CONNTRACK_HELPER_FILE" "$CONNTRACK_SERVICE_FILE"
 optimize_conntrack >/dev/null
-[ ! -e "$CONNTRACK_SYSCTL_FILE" ] || fail "foreign sysctl config was overwritten by VPSGuard"
-[ ! -e "$CONNTRACK_MODPROBE_FILE" ] || fail "foreign modprobe config triggered a VPSGuard write"
-[ ! -e "$CONNTRACK_MODULES_FILE" ] || fail "foreign config triggered a VPSGuard modules-load write"
-[ ! -e "$CONNTRACK_SERVICE_FILE" ] || fail "foreign config triggered a VPSGuard systemd unit write"
+[ ! -e "$CONNTRACK_SYSCTL_FILE" ] || fail "foreign sysctl config was overwritten by Hguard"
+[ ! -e "$CONNTRACK_MODPROBE_FILE" ] || fail "foreign modprobe config triggered a Hguard write"
+[ ! -e "$CONNTRACK_MODULES_FILE" ] || fail "foreign config triggered a Hguard modules-load write"
+[ ! -e "$CONNTRACK_SERVICE_FILE" ] || fail "foreign config triggered a Hguard systemd unit write"
 assert_file_contains "$custom_sysctl" 'net.netfilter.nf_conntrack_max=131072'
 
 pass "conntrack health, explicit optimization, custom-config protection and idempotency"
@@ -162,14 +162,14 @@ first_line="$(head -n 1 "$CONNTRACK_HELPER_FILE")"
 second_line="$(sed -n '2p' "$CONNTRACK_HELPER_FILE")"
 assert_equal "#!/usr/bin/env bash" "$first_line" "conntrack helper has the shebang on line 1"
 case "$second_line" in
-  '# Managed by VPSGuard'*) ;;
+  '# Managed by Hguard'*) ;;
   *) fail "conntrack helper's ownership marker is not on line 2: ${second_line}" ;;
 esac
 assert_success managed_file_is_owned "$CONNTRACK_HELPER_FILE"
 
 # Old-format file (marker first, shebang second) must still be recognized.
 old_format_file="$temporary_root/old-format.sh"
-printf '# Managed by VPSGuard 0.3.6\n#!/usr/bin/env bash\nset -e\n' > "$old_format_file"
+printf '# Managed by Hguard 0.3.6\n#!/usr/bin/env bash\nset -e\n' > "$old_format_file"
 assert_success managed_file_is_owned "$old_format_file"
 
 pass "conntrack helper has the shebang first; the ownership marker is recognized on line 1 or 2"

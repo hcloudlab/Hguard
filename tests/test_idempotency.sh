@@ -6,20 +6,20 @@ set -euo pipefail
 
 temporary_root="$(mktemp -d)"
 trap 'rm -rf "$temporary_root"' EXIT
-export VPSGUARD_TEST_MODE=1
-export VPSGUARD_ETC_ROOT="$temporary_root/etc"
-export VPSGUARD_STATE_DIR="$temporary_root/etc/vpsguard"
-export VPSGUARD_CONFIG_FILE="$VPSGUARD_STATE_DIR/config.env"
-export VPSGUARD_MANAGED_RULES="$VPSGUARD_STATE_DIR/managed-rules"
-export VPSGUARD_SSHD_CONFIG="$temporary_root/etc/ssh/sshd_config.d/00-vpsguard.conf"
-export BBR_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-vpsguard-bbr.conf"
-export BBR_MODULES_FILE="$temporary_root/etc/modules-load.d/vpsguard-bbr.conf"
+export HGUARD_TEST_MODE=1
+export HGUARD_ETC_ROOT="$temporary_root/etc"
+export HGUARD_STATE_DIR="$temporary_root/etc/hguard"
+export HGUARD_CONFIG_FILE="$HGUARD_STATE_DIR/config.env"
+export HGUARD_MANAGED_RULES="$HGUARD_STATE_DIR/managed-rules"
+export HGUARD_SSHD_CONFIG="$temporary_root/etc/ssh/sshd_config.d/00-hguard.conf"
+export BBR_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-hguard-bbr.conf"
+export BBR_MODULES_FILE="$temporary_root/etc/modules-load.d/hguard-bbr.conf"
 export BBR_MODULE_PERSISTENCE_REQUIRED=true
-export CONNTRACK_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-vpsguard-conntrack.conf"
-export CONNTRACK_MODPROBE_FILE="$temporary_root/etc/modprobe.d/vpsguard-nf-conntrack.conf"
-export CONNTRACK_MODULES_FILE="$temporary_root/etc/modules-load.d/vpsguard-conntrack.conf"
-export CONNTRACK_HELPER_FILE="$temporary_root/etc/vpsguard/apply-conntrack-profile.sh"
-export CONNTRACK_SERVICE_FILE="$temporary_root/etc/systemd/system/vpsguard-conntrack.service"
+export CONNTRACK_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-hguard-conntrack.conf"
+export CONNTRACK_MODPROBE_FILE="$temporary_root/etc/modprobe.d/hguard-nf-conntrack.conf"
+export CONNTRACK_MODULES_FILE="$temporary_root/etc/modules-load.d/hguard-conntrack.conf"
+export CONNTRACK_HELPER_FILE="$temporary_root/etc/hguard/apply-conntrack-profile.sh"
+export CONNTRACK_SERVICE_FILE="$temporary_root/etc/systemd/system/hguard-conntrack.service"
 # shellcheck source=install.sh
 . "$TEST_ROOT/install.sh"
 
@@ -30,22 +30,22 @@ ORIGINAL_SSH_PORT=22
 INSTALL_STATUS='pending-port-finalization'
 
 write_config_env
-write_vpsguard_sshd_config true
+write_hguard_sshd_config true
 write_bbr_files
 write_conntrack_files 16384
 record_managed_rule '2222/tcp'
-first="$(cksum "$VPSGUARD_CONFIG_FILE" "$VPSGUARD_SSHD_CONFIG" "$BBR_SYSCTL_FILE" "$BBR_MODULES_FILE" "$CONNTRACK_SYSCTL_FILE" "$CONNTRACK_MODPROBE_FILE" "$CONNTRACK_MODULES_FILE" "$CONNTRACK_HELPER_FILE" "$CONNTRACK_SERVICE_FILE" "$VPSGUARD_MANAGED_RULES")"
-assert_equal password "$(read_env_value "$VPSGUARD_CONFIG_FILE" SUDO_MODE)" "persisted sudo mode"
+first="$(cksum "$HGUARD_CONFIG_FILE" "$HGUARD_SSHD_CONFIG" "$BBR_SYSCTL_FILE" "$BBR_MODULES_FILE" "$CONNTRACK_SYSCTL_FILE" "$CONNTRACK_MODPROBE_FILE" "$CONNTRACK_MODULES_FILE" "$CONNTRACK_HELPER_FILE" "$CONNTRACK_SERVICE_FILE" "$HGUARD_MANAGED_RULES")"
+assert_equal password "$(read_env_value "$HGUARD_CONFIG_FILE" SUDO_MODE)" "persisted sudo mode"
 
 for _iteration in {1..10}; do
   write_config_env
-  write_vpsguard_sshd_config true
+  write_hguard_sshd_config true
   write_bbr_files
   write_conntrack_files 16384
   record_managed_rule '2222/tcp'
 done
 
-last="$(cksum "$VPSGUARD_CONFIG_FILE" "$VPSGUARD_SSHD_CONFIG" "$BBR_SYSCTL_FILE" "$BBR_MODULES_FILE" "$CONNTRACK_SYSCTL_FILE" "$CONNTRACK_MODPROBE_FILE" "$CONNTRACK_MODULES_FILE" "$CONNTRACK_HELPER_FILE" "$CONNTRACK_SERVICE_FILE" "$VPSGUARD_MANAGED_RULES")"
+last="$(cksum "$HGUARD_CONFIG_FILE" "$HGUARD_SSHD_CONFIG" "$BBR_SYSCTL_FILE" "$BBR_MODULES_FILE" "$CONNTRACK_SYSCTL_FILE" "$CONNTRACK_MODPROBE_FILE" "$CONNTRACK_MODULES_FILE" "$CONNTRACK_HELPER_FILE" "$CONNTRACK_SERVICE_FILE" "$HGUARD_MANAGED_RULES")"
 assert_equal "$first" "$last" "ten-run convergence"
 pass "10 consecutive simulated runs converge without content drift"
 

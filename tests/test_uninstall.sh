@@ -6,21 +6,21 @@ set -euo pipefail
 
 temporary_root="$(mktemp -d)"
 trap 'rm -rf "$temporary_root"' EXIT
-export VPSGUARD_TEST_MODE=1
-export VPSGUARD_ETC_ROOT="$temporary_root/etc"
-export VPSGUARD_STATE_DIR="$temporary_root/etc/vpsguard"
-export VPSGUARD_MANAGED_RULES="$VPSGUARD_STATE_DIR/managed-rules"
+export HGUARD_TEST_MODE=1
+export HGUARD_ETC_ROOT="$temporary_root/etc"
+export HGUARD_STATE_DIR="$temporary_root/etc/hguard"
+export HGUARD_MANAGED_RULES="$HGUARD_STATE_DIR/managed-rules"
 # shellcheck source=uninstall.sh
 . "$TEST_ROOT/uninstall.sh"
 
 create_managed_conntrack_artifacts() {
   mkdir -p "$(dirname "$CONNTRACK_SYSCTL_FILE")" "$(dirname "$CONNTRACK_MODPROBE_FILE")"
-  printf '# Managed by VPSGuard 0.3.6\nnet.netfilter.nf_conntrack_tcp_timeout_syn_sent = 30\n' > "$CONNTRACK_SYSCTL_FILE"
-  printf '# Managed by VPSGuard 0.3.6\noptions nf_conntrack hashsize=16384\n' > "$CONNTRACK_MODPROBE_FILE"
+  printf '# Managed by Hguard 0.3.6\nnet.netfilter.nf_conntrack_tcp_timeout_syn_sent = 30\n' > "$CONNTRACK_SYSCTL_FILE"
+  printf '# Managed by Hguard 0.3.6\noptions nf_conntrack hashsize=16384\n' > "$CONNTRACK_MODPROBE_FILE"
   mkdir -p "$(dirname "$CONNTRACK_MODULES_FILE")" "$(dirname "$CONNTRACK_HELPER_FILE")" "$(dirname "$CONNTRACK_SERVICE_FILE")"
-  printf '# Managed by VPSGuard 0.3.6\nnf_conntrack\n' > "$CONNTRACK_MODULES_FILE"
-  printf '# Managed by VPSGuard 0.3.6\n' > "$CONNTRACK_HELPER_FILE"
-  printf '# Managed by VPSGuard 0.3.6\n[Service]\nType=oneshot\nRemainAfterExit=yes\n' > "$CONNTRACK_SERVICE_FILE"
+  printf '# Managed by Hguard 0.3.6\nnf_conntrack\n' > "$CONNTRACK_MODULES_FILE"
+  printf '# Managed by Hguard 0.3.6\n' > "$CONNTRACK_HELPER_FILE"
+  printf '# Managed by Hguard 0.3.6\n[Service]\nType=oneshot\nRemainAfterExit=yes\n' > "$CONNTRACK_SERVICE_FILE"
 }
 
 assert_conntrack_artifacts_absent() {
@@ -33,7 +33,7 @@ assert_conntrack_artifacts_absent() {
 
 managed="$temporary_root/managed.conf"
 foreign="$temporary_root/foreign.conf"
-printf '# Managed by VPSGuard 0.3.5\nvalue\n' > "$managed"
+printf '# Managed by Hguard 0.3.5\nvalue\n' > "$managed"
 printf '# Managed by another tool\nvalue\n' > "$foreign"
 remove_owned_file "$managed"
 remove_owned_file "$foreign"
@@ -45,9 +45,9 @@ systemctl_log="$temporary_root/systemctl.log"
 systemctl() {
   printf '%s\n' "$*" >> "$systemctl_log"
 }
-VPSGUARD_TEST_MODE=0
+HGUARD_TEST_MODE=0
 disable_owned_unit "$CONNTRACK_SERVICE_FILE" "$CONNTRACK_SERVICE_NAME"
-VPSGUARD_TEST_MODE=1
+HGUARD_TEST_MODE=1
 assert_file_contains "$systemctl_log" "stop $CONNTRACK_SERVICE_NAME"
 assert_file_contains "$systemctl_log" "disable $CONNTRACK_SERVICE_NAME"
 assert_file_contains "$systemctl_log" 'daemon-reload'
@@ -64,9 +64,9 @@ remove_owned_file "$CONNTRACK_SYSCTL_FILE"
 
 printf '# custom unit\n' > "$CONNTRACK_SERVICE_FILE"
 rm -f "$systemctl_log"
-VPSGUARD_TEST_MODE=0
+HGUARD_TEST_MODE=0
 disable_owned_unit "$CONNTRACK_SERVICE_FILE" "$CONNTRACK_SERVICE_NAME"
-VPSGUARD_TEST_MODE=1
+HGUARD_TEST_MODE=1
 [ -e "$CONNTRACK_SERVICE_FILE" ] || fail "foreign conntrack systemd unit was removed"
 [ ! -e "$systemctl_log" ] || fail "foreign conntrack systemd unit triggered systemctl"
 
@@ -83,11 +83,11 @@ id() {
     printf 'existingadmin sudo\n'
   fi
 }
-VPSGUARD_TEST_MODE=0
+HGUARD_TEST_MODE=0
 ( main )
-VPSGUARD_TEST_MODE=1
+HGUARD_TEST_MODE=1
 assert_conntrack_artifacts_absent
-[ ! -d "$VPSGUARD_STATE_DIR" ] || fail "empty conntrack-only state directory was not removed"
+[ ! -d "$HGUARD_STATE_DIR" ] || fail "empty conntrack-only state directory was not removed"
 assert_equal 131072 "$(cat "$temporary_root/runtime/nf_conntrack_max")" "conntrack-only cleanup preserves runtime max"
 assert_equal 32768 "$(cat "$temporary_root/runtime/hashsize")" "conntrack-only cleanup preserves runtime hashsize"
 assert_equal 120 "$(cat "$temporary_root/runtime/syn_sent")" "conntrack-only cleanup preserves runtime timeout"
@@ -117,8 +117,8 @@ fi
 assert_file_contains "$untracked_error" 'refusing an untracked uninstall'
 
 rm -rf "${temporary_root:?}/etc" "$systemctl_log"
-mkdir -p "$VPSGUARD_STATE_DIR"
-printf "NEW_USER='trackedadmin'\nSSH_PORT='22'\nORIGINAL_SSH_PORT='22'\nSUDO_MODE='password'\n" > "$VPSGUARD_CONFIG_FILE"
+mkdir -p "$HGUARD_STATE_DIR"
+printf "NEW_USER='trackedadmin'\nSSH_PORT='22'\nORIGINAL_SSH_PORT='22'\nSUDO_MODE='password'\n" > "$HGUARD_CONFIG_FILE"
 tracked_log="$temporary_root/tracked.log"
 (
   remove_safe_ufw_rules() { printf 'ufw\n' >> "$tracked_log"; }
@@ -129,10 +129,10 @@ tracked_log="$temporary_root/tracked.log"
 assert_file_contains "$tracked_log" 'ufw'
 assert_file_contains "$tracked_log" 'fail2ban'
 assert_file_contains "$tracked_log" 'ssh'
-[ ! -e "$VPSGUARD_CONFIG_FILE" ] || fail "tracked uninstall did not remove config"
+[ ! -e "$HGUARD_CONFIG_FILE" ] || fail "tracked uninstall did not remove config"
 
-mkdir -p "$VPSGUARD_STATE_DIR"
-printf '# UFW rules added by VPSGuard\n22/tcp\n2222/tcp\n' > "$VPSGUARD_MANAGED_RULES"
+mkdir -p "$HGUARD_STATE_DIR"
+printf '# UFW rules added by Hguard\n22/tcp\n2222/tcp\n' > "$HGUARD_MANAGED_RULES"
 ufw_log="$temporary_root/ufw.log"
 ufw() {
   if [ "$1" = status ]; then
@@ -153,8 +153,8 @@ fi
 assert_file_contains "$TEST_ROOT/uninstall.sh" 'systemctl disable'
 
 mkdir -p "$SUDOERS_DIR"
-sudoers_file="${SUDOERS_DIR}/vpsguard-existingadmin"
-printf '# Managed by VPSGuard 0.3.5\nexistingadmin ALL=(ALL:ALL) NOPASSWD: ALL\n' > "$sudoers_file"
+sudoers_file="${SUDOERS_DIR}/hguard-existingadmin"
+printf '# Managed by Hguard 0.3.5\nexistingadmin ALL=(ALL:ALL) NOPASSWD: ALL\n' > "$sudoers_file"
 id() { printf 'existingadmin sudo\n'; }
 # Called indirectly by remove_passwordless_sudoers_safely.
 # shellcheck disable=SC2317,SC2329
@@ -178,7 +178,7 @@ sudo() {
 assert_success remove_passwordless_sudoers_safely existingadmin
 [ ! -e "$sudoers_file" ] || fail "safe passwordless sudo policy was not removed"
 
-printf '# Managed by VPSGuard 0.3.5\nexistingadmin ALL=(ALL:ALL) NOPASSWD: ALL\n' > "$sudoers_file"
+printf '# Managed by Hguard 0.3.5\nexistingadmin ALL=(ALL:ALL) NOPASSWD: ALL\n' > "$sudoers_file"
 # Called indirectly by remove_passwordless_sudoers_safely.
 # shellcheck disable=SC2317,SC2329
 passwd() { printf 'existingadmin L 2026-08-03 0 99999 7 -1\n'; }
@@ -198,13 +198,13 @@ assert_failure remove_passwordless_sudoers_safely existingadmin
 
 mkdir -p "$(dirname "$SSHD_CONFIG")"
 printf '%s\n' \
-  '# BEGIN VPSGuard managed include' \
-  'Include /etc/ssh/sshd_config.d/00-vpsguard.conf' \
-  '# END VPSGuard managed include' \
+  '# BEGIN Hguard managed include' \
+  'Include /etc/ssh/sshd_config.d/00-hguard.conf' \
+  '# END Hguard managed include' \
   'PermitRootLogin prohibit-password' > "$SSHD_CONFIG"
-assert_success remove_vpsguard_sshd_include
+assert_success remove_hguard_sshd_include
 assert_file_contains "$SSHD_CONFIG" 'PermitRootLogin prohibit-password'
-if grep -Fq 'VPSGuard managed include' "$SSHD_CONFIG"; then
+if grep -Fq 'Hguard managed include' "$SSHD_CONFIG"; then
   fail "managed sshd include markers remained after safe removal"
 fi
 

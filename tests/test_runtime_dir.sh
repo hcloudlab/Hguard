@@ -6,10 +6,10 @@ set -euo pipefail
 
 temporary_root="$(mktemp -d)"
 trap 'rm -rf "$temporary_root"' EXIT
-export VPSGUARD_TEST_MODE=1
-export VPSGUARD_ETC_ROOT="$temporary_root/etc"
-export VPSGUARD_RUN_ROOT="$temporary_root/run"
-export VPSGUARD_STATE_DIR="$temporary_root/etc/vpsguard"
+export HGUARD_TEST_MODE=1
+export HGUARD_ETC_ROOT="$temporary_root/etc"
+export HGUARD_RUN_ROOT="$temporary_root/run"
+export HGUARD_STATE_DIR="$temporary_root/etc/hguard"
 # shellcheck source=install.sh
 . "$TEST_ROOT/install.sh"
 
@@ -20,7 +20,7 @@ resolve_sudo_mode() { SUDO_MODE=password; }
 resolve_ssh_ports() { :; }
 check_root_ssh_key() { :; }
 write_config_env() { :; }
-upgrade_system() { rm -rf "$VPSGUARD_RUN_ROOT/sshd"; }
+upgrade_system() { rm -rf "$HGUARD_RUN_ROOT/sshd"; }
 fail2ban_systemd_backend_available() { :; }
 ensure_managed_user() { :; }
 configure_authorized_keys() { :; }
@@ -29,7 +29,7 @@ verify_sudo_configuration() { :; }
 configure_ufw_before_ssh() { :; }
 runtime_directory_seen=false
 configure_ssh_safely() {
-  if [ -d "$VPSGUARD_RUN_ROOT/sshd" ]; then
+  if [ -d "$HGUARD_RUN_ROOT/sshd" ]; then
     runtime_directory_seen=true
   fi
 }
@@ -42,7 +42,7 @@ print_final_summary() { :; }
 main_output_file="$temporary_root/main-output.log"
 main > "$main_output_file" 2>&1
 assert_equal true "$runtime_directory_seen" "post-upgrade SSH runtime directory"
-runtime_directory_mode="$(stat -c '%a' "$VPSGUARD_RUN_ROOT/sshd" 2>/dev/null || stat -f '%Lp' "$VPSGUARD_RUN_ROOT/sshd")"
+runtime_directory_mode="$(stat -c '%a' "$HGUARD_RUN_ROOT/sshd" 2>/dev/null || stat -f '%Lp' "$HGUARD_RUN_ROOT/sshd")"
 assert_equal 755 "$runtime_directory_mode" "SSH runtime directory mode"
 # The default install flow now applies the conntrack profile unconditionally
 # (after enable_bbr, inside main() itself - see optimize_conntrack's call site),

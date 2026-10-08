@@ -6,10 +6,10 @@ set -euo pipefail
 
 temporary_root="$(mktemp -d)"
 trap 'rm -rf "$temporary_root"' EXIT
-export VPSGUARD_TEST_MODE=1
-export VPSGUARD_ETC_ROOT="$temporary_root/etc"
-export BBR_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-vpsguard-bbr.conf"
-export BBR_MODULES_FILE="$temporary_root/etc/modules-load.d/vpsguard-bbr.conf"
+export HGUARD_TEST_MODE=1
+export HGUARD_ETC_ROOT="$temporary_root/etc"
+export BBR_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-hguard-bbr.conf"
+export BBR_MODULES_FILE="$temporary_root/etc/modules-load.d/hguard-bbr.conf"
 export BBR_MODULE_PERSISTENCE_REQUIRED=true
 # shellcheck source=install.sh
 . "$TEST_ROOT/install.sh"
@@ -35,8 +35,8 @@ pass "BBR state classification and idempotent managed files"
 # Fresh paths: the block above already wrote identical content to the
 # original BBR_SYSCTL_FILE/BBR_MODULES_FILE, which would make this block's
 # "first run" look like a no-op rerun instead of a genuine first write.
-BBR_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-vpsguard-bbr-2.conf"
-BBR_MODULES_FILE="$temporary_root/etc/modules-load.d/vpsguard-bbr-2.conf"
+BBR_SYSCTL_FILE="$temporary_root/etc/sysctl.d/99-hguard-bbr-2.conf"
+BBR_MODULES_FILE="$temporary_root/etc/modules-load.d/hguard-bbr-2.conf"
 sysctl_p_count=0
 current_cc="cubic"
 current_qdisc="fq"

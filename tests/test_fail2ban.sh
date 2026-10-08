@@ -4,7 +4,7 @@ set -euo pipefail
 # shellcheck source=tests/test_helper.sh
 . "$(dirname "$0")/test_helper.sh"
 
-export VPSGUARD_TEST_MODE=1
+export HGUARD_TEST_MODE=1
 # shellcheck source=install.sh
 . "$TEST_ROOT/install.sh"
 
@@ -59,11 +59,11 @@ pass "explicit systemd backend dependency and bounded fail2ban readiness retries
 # changed - real atomic_write change-detection drives this, not a stub.
 temporary_root="$(mktemp -d)"
 trap 'rm -rf "$temporary_root"' EXIT
-FAIL2BAN_JAIL="$temporary_root/vpsguard-sshd.local"
+FAIL2BAN_JAIL="$temporary_root/hguard-sshd.local"
 SSH_PORT=2222
 ORIGINAL_SSH_PORT=2222
-VPSGUARD_PENDING_PORT_MARKER="$temporary_root/.pending-port-finalization"
-rm -f "$VPSGUARD_PENDING_PORT_MARKER"
+HGUARD_PENDING_PORT_MARKER="$temporary_root/.pending-port-finalization"
+rm -f "$HGUARD_PENDING_PORT_MARKER"
 restart_count=0
 # Called below, before being redefined further down for the next scenario.
 # shellcheck disable=SC2329
@@ -160,11 +160,11 @@ assert_failure current_connection_ip
 
 temporary_root="$(mktemp -d)"
 trap 'rm -rf "$temporary_root"' EXIT
-FAIL2BAN_JAIL="$temporary_root/vpsguard-sshd.local"
+FAIL2BAN_JAIL="$temporary_root/hguard-sshd.local"
 SSH_PORT=22
 ORIGINAL_SSH_PORT=22
-VPSGUARD_PENDING_PORT_MARKER="$temporary_root/.pending-port-finalization"
-rm -f "$VPSGUARD_PENDING_PORT_MARKER"
+HGUARD_PENDING_PORT_MARKER="$temporary_root/.pending-port-finalization"
+rm -f "$HGUARD_PENDING_PORT_MARKER"
 systemctl() {
   case "$*" in
     'enable fail2ban.service') return 0 ;;

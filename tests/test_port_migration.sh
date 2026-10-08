@@ -6,24 +6,24 @@ set -euo pipefail
 
 temporary_root="$(mktemp -d)"
 trap 'rm -rf "$temporary_root"' EXIT
-export VPSGUARD_TEST_MODE=1
-export VPSGUARD_ETC_ROOT="$temporary_root/etc"
-export VPSGUARD_STATE_DIR="$temporary_root/etc/vpsguard"
-export VPSGUARD_CONFIG_FILE="$VPSGUARD_STATE_DIR/config.env"
-export VPSGUARD_MANAGED_RULES="$VPSGUARD_STATE_DIR/managed-rules"
-export VPSGUARD_INSTALLED_MARKER="$VPSGUARD_STATE_DIR/.installed"
-export VPSGUARD_PENDING_PORT_MARKER="$VPSGUARD_STATE_DIR/.pending-port-finalization"
+export HGUARD_TEST_MODE=1
+export HGUARD_ETC_ROOT="$temporary_root/etc"
+export HGUARD_STATE_DIR="$temporary_root/etc/hguard"
+export HGUARD_CONFIG_FILE="$HGUARD_STATE_DIR/config.env"
+export HGUARD_MANAGED_RULES="$HGUARD_STATE_DIR/managed-rules"
+export HGUARD_INSTALLED_MARKER="$HGUARD_STATE_DIR/.installed"
+export HGUARD_PENDING_PORT_MARKER="$HGUARD_STATE_DIR/.pending-port-finalization"
 # shellcheck source=install.sh
 . "$TEST_ROOT/install.sh"
 
-mkdir -p "$VPSGUARD_STATE_DIR"
+mkdir -p "$HGUARD_STATE_DIR"
 SSH_PORT=2222
 ORIGINAL_SSH_PORT=22
 
 resolve_port_migration_requirement 2222
 assert_equal true "$PORT_MIGRATION_REQUIRED" "first install requires safe port migration"
 
-atomic_write "$VPSGUARD_INSTALLED_MARKER" 600 $'success\n'
+atomic_write "$HGUARD_INSTALLED_MARKER" 600 $'success\n'
 resolve_port_migration_requirement 2222
 assert_equal false "$PORT_MIGRATION_REQUIRED" "finalized rerun must not recreate migration"
 
@@ -39,10 +39,10 @@ assert_equal 2222 "$SSH_PORT" "rerun preserves configured target port"
 assert_equal 22 "$ORIGINAL_SSH_PORT" "rerun preserves historical original port"
 assert_equal false "$PORT_MIGRATION_REQUIRED" "failed rerun status does not erase prior finalization"
 
-atomic_write "$VPSGUARD_PENDING_PORT_MARKER" 600 $'target=2222\nold=22\n'
+atomic_write "$HGUARD_PENDING_PORT_MARKER" 600 $'target=2222\nold=22\n'
 resolve_port_migration_requirement 2222
 assert_equal true "$PORT_MIGRATION_REQUIRED" "pending install still requires finalization"
-rm -f "$VPSGUARD_PENDING_PORT_MARKER"
+rm -f "$HGUARD_PENDING_PORT_MARKER"
 
 SSH_PORT=3333
 resolve_port_migration_requirement 2222
@@ -63,7 +63,7 @@ configure_ufw_before_ssh
 assert_equal '2222,22,' "$requested_ufw_ports" "active migration must preserve both UFW ports"
 
 runtime_policy_calls=""
-write_vpsguard_ssh_runtime_policy() { runtime_policy_calls="${runtime_policy_calls}${1},"; }
+write_hguard_ssh_runtime_policy() { runtime_policy_calls="${runtime_policy_calls}${1},"; }
 verify_effective_sshd_config() { return 0; }
 apply_ssh_runtime() { return 0; }
 # Called below, before being redefined further down for the next scenario.
@@ -74,7 +74,7 @@ ufw_tcp_rule_exists() { return 0; }
 PORT_MIGRATION_REQUIRED=false
 configure_ssh_safely
 assert_equal 'false,' "$runtime_policy_calls" "finalized rerun writes target-only SSH policy"
-[ ! -e "$VPSGUARD_PENDING_PORT_MARKER" ] || fail "finalized rerun recreated pending migration marker"
+[ ! -e "$HGUARD_PENDING_PORT_MARKER" ] || fail "finalized rerun recreated pending migration marker"
 
 pass "finalized reruns do not restore the old SSH port"
 
@@ -126,7 +126,7 @@ migration_output_file="$temporary_root/migration-output.log"
 PORT_MIGRATION_REQUIRED=true
 SSH_PORT=2222
 ORIGINAL_SSH_PORT=22
-rm -f "$VPSGUARD_PENDING_PORT_MARKER"
+rm -f "$HGUARD_PENDING_PORT_MARKER"
 configure_ssh_safely > "$migration_output_file" 2>&1
 assert_file_contains "$migration_output_file" 'ssh -p 2222 repeatadmin@203.0.113.9'
 
