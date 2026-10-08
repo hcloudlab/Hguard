@@ -105,3 +105,29 @@ configure_ssh_safely
 assert_equal "success-with-warnings" "$INSTALL_STATUS" "finalization warns when the old port is still listening"
 
 pass "configure_ssh_safely downgrades to success-with-warnings if the old port stays open"
+
+### resolve_display_ip is shared between the port-migration prompt and the
+### final summary (print_final_summary), so both show the same thing
+### instead of the migration prompt always falling back to a literal
+### "SERVER_IP" placeholder regardless of whether a real address is known.
+# Called indirectly by resolve_display_ip.
+# shellcheck disable=SC2329
+hostname() { [ "$1" = "-I" ] && printf '203.0.113.9 fe80::1\n'; }
+assert_equal 203.0.113.9 "$(resolve_display_ip)" "resolve_display_ip returns the real address when it is public"
+
+# shellcheck disable=SC2329
+hostname() { [ "$1" = "-I" ] && printf '172.31.9.9 fe80::1\n'; }
+assert_equal "$(printf 'SERVER_IP\n检测到的是云内网地址（172.31.9.9），请替换上面的 SERVER_IP 为服务商控制台中的公网 IP。')" \
+  "$(resolve_display_ip)" "resolve_display_ip hides a private VPC address behind SERVER_IP with a hint"
+
+# shellcheck disable=SC2329
+hostname() { [ "$1" = "-I" ] && printf '203.0.113.9 fe80::1\n'; }
+migration_output_file="$temporary_root/migration-output.log"
+PORT_MIGRATION_REQUIRED=true
+SSH_PORT=2222
+ORIGINAL_SSH_PORT=22
+rm -f "$VPSGUARD_PENDING_PORT_MARKER"
+configure_ssh_safely > "$migration_output_file" 2>&1
+assert_file_contains "$migration_output_file" 'ssh -p 2222 repeatadmin@203.0.113.9'
+
+pass "configure_ssh_safely's migration prompt shows the same resolved IP as the final summary"

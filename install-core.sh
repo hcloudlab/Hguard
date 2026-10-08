@@ -1522,7 +1522,12 @@ configure_ssh_safely() {
 old=${ORIGINAL_SSH_PORT}
 "
   warn "New SSH port ${SSH_PORT} is listening locally. Old port ${ORIGINAL_SSH_PORT} remains listening and allowed until remote login is confirmed."
-  printf '请在第二个终端测试：ssh -p %s %s@SERVER_IP\n' "$SSH_PORT" "$NEW_USER"
+  local migration_resolved migration_display_ip migration_display_hint
+  migration_resolved="$(resolve_display_ip)"
+  migration_display_ip="$(printf '%s\n' "$migration_resolved" | head -n1)"
+  migration_display_hint="$(printf '%s\n' "$migration_resolved" | tail -n +2)"
+  printf '请在第二个终端测试：ssh -p %s %s@%s\n' "$SSH_PORT" "$NEW_USER" "$migration_display_ip"
+  [ -z "$migration_display_hint" ] || printf '%b%s%b\n' "$YELLOW" "$migration_display_hint" "$NC"
 
   if interactive_terminal_available; then
     read -r -p "确认第二终端登录和 sudo 正常后输入 YES；其他输入保留旧端口：" answer
@@ -2258,13 +2263,30 @@ is_private_ipv4() {
   esac
 }
 
-print_final_summary() {
-  local detected_ip display_ip
+# Resolves the IP to show the operator in an "ssh -p ... user@<ip>" hint.
+# Prints the display value (a real address, or the SERVER_IP placeholder)
+# on the first line; when hostname -I's address is private, also prints a
+# hint (to be shown alongside, not parsed) on a second line explaining to
+# use the provider console's public IP instead. Shared by the port-
+# migration prompt and the final summary, so both show the same thing
+# instead of one always falling back to a literal "SERVER_IP".
+resolve_display_ip() {
+  local detected_ip
+
   detected_ip="$(hostname -I | awk '{print $1}')"
-  display_ip="$detected_ip"
   if [ -n "$detected_ip" ] && is_private_ipv4 "$detected_ip"; then
-    display_ip=""
+    printf 'SERVER_IP\n'
+    printf '检测到的是云内网地址（%s），请替换上面的 SERVER_IP 为服务商控制台中的公网 IP。\n' "$detected_ip"
+    return 0
   fi
+  printf '%s\n' "${detected_ip:-SERVER_IP}"
+}
+
+print_final_summary() {
+  local resolved display_ip display_hint
+  resolved="$(resolve_display_ip)"
+  display_ip="$(printf '%s\n' "$resolved" | head -n1)"
+  display_hint="$(printf '%s\n' "$resolved" | tail -n +2)"
 
   printf '\n%bVPSGuard %s acceptance completed%b\n' "$BOLD" "$VPSGUARD_VERSION" "$NC"
   printf 'Install status: %s\n' "$INSTALL_STATUS"
@@ -2273,10 +2295,8 @@ print_final_summary() {
   printf 'Target SSH port: %s\n' "$SSH_PORT"
   printf 'SSH runtime mode: %s\n' "$SSH_RUNTIME_MODE"
   printf 'BBR status: %s\n' "$BBR_STATUS"
-  printf 'Test from a second terminal: ssh -p %s %s@%s\n' "$SSH_PORT" "$NEW_USER" "${display_ip:-SERVER_IP}"
-  if [ -n "$detected_ip" ] && [ -z "$display_ip" ]; then
-    printf '%b检测到的是云内网地址（%s），请替换上面的 SERVER_IP 为服务商控制台中的公网 IP。%b\n' "$YELLOW" "$detected_ip" "$NC"
-  fi
+  printf 'Test from a second terminal: ssh -p %s %s@%s\n' "$SSH_PORT" "$NEW_USER" "$display_ip"
+  [ -z "$display_hint" ] || printf '%b%s%b\n' "$YELLOW" "$display_hint" "$NC"
   printf '%bDo not close the current session until remote login and sudo are verified.%b\n' "$YELLOW" "$NC"
   if [ "$INSTALL_STATUS" = "pending-port-finalization" ]; then
     warn "Old SSH port ${ORIGINAL_SSH_PORT} is intentionally retained. Rerun VPSGuard after remote validation to finalize."
