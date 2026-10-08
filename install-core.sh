@@ -298,7 +298,10 @@ check_ubuntu_lts() {
   # shellcheck disable=SC1090
   . "$os_release"
   [ "${ID:-}" = "ubuntu" ] || error "Unsupported OS: ${PRETTY_NAME:-unknown}. Ubuntu LTS is required."
-  printf '%s' "${VERSION:-}" | grep -qi 'LTS' || error "Unsupported Ubuntu release: ${PRETTY_NAME:-unknown}."
+  case "${VERSION_ID:-}" in
+    22.04|24.04) ;;
+    *) error "该版本尚未经过测试: ${PRETTY_NAME:-unknown}. Supported: Ubuntu 22.04, 24.04." ;;
+  esac
   info "Detected Ubuntu LTS: ${PRETTY_NAME:-unknown}"
 }
 

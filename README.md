@@ -31,7 +31,7 @@ VPSGuard 不安装第三方内核，不自动重启服务器，也不会在卸�
 | --- | --- | --- |
 | 22.04 LTS | 已完成真实 VPS 验证 | 覆盖传统 `ssh.service`、password/passwordless、22 → 2222 双阶段迁移、双向模式迁移、失败回滚、三次重跑、重启和安全部分卸载 |
 | 24.04 LTS | 已完成真实 VPS 验证 | 覆盖 `ssh.socket`、password/passwordless、双端口迁移、双向模式迁移、失败回滚、重跑、重启和安全部分卸载 |
-| 26.04 LTS | Experimental / 待验证 | 官方已发布，但当前没有 GitHub-hosted 26.04 runner，也未做真实 VPS 验证 |
+| 26.04 LTS | 不支持，安装前报错 | OpenSSH 10 改由 `sshd-session` 写日志，fail2ban 现有的 `_COMM=sshd` 过滤器可能失效；未做适配前 `check_ubuntu_lts` 会在改动前直接报错 |
 
 真实验证使用可随时重装并具有控制台回退能力的临时 VPS。不同云镜像仍可能包含额外 SSH、网络或软件源定制，首次使用时不要省略第二终端和云控制台门禁。
 
