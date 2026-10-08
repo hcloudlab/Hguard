@@ -622,10 +622,87 @@ managed_user_home() {
   getent passwd "$NEW_USER" | awk -F: '{print $6}'
 }
 
+# Prints the subset of an authorized_keys file's lines that are usable for
+# interactive login: non-comment, non-blank, and without a forced "command="
+# option. Cloud images (AWS, etc.) ship root's authorized_keys with a
+# command= line that prints a warning and disconnects; copying that line
+# verbatim into the new admin's authorized_keys locks them out on first
+# login. Options are comma-joined with no unquoted whitespace before the
+# command value, so the forced-command option always lands in the line's
+# first whitespace-delimited field - checking that field for "command=" is
+# enough to find it without a full authorized_keys options parser.
+usable_pubkey_lines() {
+  local file="$1" lines
+  [ -f "$file" ] && [ ! -L "$file" ] || return 1
+  lines="$(awk 'NF && $1 !~ /^#/ && $1 !~ /command=/' "$file" 2>/dev/null)"
+  [ -n "$lines" ] || return 1
+  printf '%s\n' "$lines"
+}
+
+# Prints the path of the authorized_keys file to source the new admin's
+# login key(s) from: root's, or - when root has none usable (e.g. a cloud
+# image's forced-command key) - the sudo-invoking user's, as a fallback.
+resolve_admin_pubkey_source() {
+  local sudo_user_home sudo_authorized_keys
+
+  if usable_pubkey_lines "$ROOT_AUTHORIZED_KEYS" >/dev/null; then
+    printf '%s\n' "$ROOT_AUTHORIZED_KEYS"
+    return 0
+  fi
+
+  if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    sudo_user_home="$(getent passwd "$SUDO_USER" 2>/dev/null | awk -F: '{print $6}')"
+    if [ -n "$sudo_user_home" ] && [ ! -L "${sudo_user_home}/.ssh" ]; then
+      sudo_authorized_keys="${sudo_user_home}/.ssh/authorized_keys"
+      if usable_pubkey_lines "$sudo_authorized_keys" >/dev/null; then
+        printf '%s\n' "$sudo_authorized_keys"
+        return 0
+      fi
+    fi
+  fi
+
+  return 1
+}
+
 check_root_ssh_key() {
-  [ -s "$ROOT_AUTHORIZED_KEYS" ] || error "${ROOT_AUTHORIZED_KEYS} is missing or empty. Add a valid public key before running VPSGuard."
-  awk 'NF && $1 !~ /^#/' "$ROOT_AUTHORIZED_KEYS" | grep -q . || error "No usable public-key entry was found in ${ROOT_AUTHORIZED_KEYS}."
-  ssh-keygen -l -f "$ROOT_AUTHORIZED_KEYS" >/dev/null 2>&1 || error "${ROOT_AUTHORIZED_KEYS} does not contain a public key that ssh-keygen can parse."
+  local pubkey_source tmp
+
+  pubkey_source="$(resolve_admin_pubkey_source)" \
+    || error "root 的 ${ROOT_AUTHORIZED_KEYS} 中的公钥带有云镜像强制的登录限制（command= 选项），无法用于交互式登录，且当前 sudo 用户（SUDO_USER）也没有可用的公钥。请在其中之一添加一个不带 command= 限制的公钥后重试。"
+
+  tmp="$(mktemp)"
+  usable_pubkey_lines "$pubkey_source" > "$tmp"
+  if ! ssh-keygen -l -f "$tmp" >/dev/null 2>&1; then
+    rm -f "$tmp"
+    error "${pubkey_source} 中没有可被 ssh-keygen 解析的公钥条目。"
+  fi
+  rm -f "$tmp"
+}
+
+# Removes any line from the admin's authorized_keys that is verbatim
+# identical to a forced-command line in root's authorized_keys - residue
+# from a previous VPSGuard run that copied such a line before this check
+# existed. Every other line is left untouched.
+purge_root_forced_command_residue() {
+  local target_file="$1" root_file="$2" restricted_tmp filtered_tmp
+
+  [ -f "$target_file" ] && [ -f "$root_file" ] || return 0
+
+  restricted_tmp="$(mktemp)"
+  awk 'NF && $1 !~ /^#/ && $1 ~ /command=/' "$root_file" > "$restricted_tmp"
+  if [ -s "$restricted_tmp" ]; then
+    filtered_tmp="$(mktemp)"
+    grep -Fxvf "$restricted_tmp" "$target_file" > "$filtered_tmp" 2>/dev/null || true
+    if ! cmp -s "$target_file" "$filtered_tmp"; then
+      chmod 600 "$filtered_tmp"
+      chown --reference="$target_file" "$filtered_tmp" 2>/dev/null || true
+      mv -f "$filtered_tmp" "$target_file"
+      info "Removed a residual forced-command line from ${target_file}."
+    else
+      rm -f "$filtered_tmp"
+    fi
+  fi
+  rm -f "$restricted_tmp"
 }
 
 root_pubkey_sync_required() {
@@ -638,9 +715,10 @@ root_pubkey_sync_required() {
 }
 
 configure_authorized_keys() {
-  local user_home ssh_directory authorized_keys temporary_file
+  local user_home ssh_directory authorized_keys temporary_file pubkey_source
 
   check_root_ssh_key
+  pubkey_source="$(resolve_admin_pubkey_source)"
   user_home="$(managed_user_home)"
   if [ -z "$user_home" ] || [ "$user_home" = "/" ]; then
     error "Could not resolve a safe home directory for ${NEW_USER}."
@@ -656,6 +734,8 @@ configure_authorized_keys() {
 
   ensure_directory "$ssh_directory" 700
 
+  purge_root_forced_command_residue "$authorized_keys" "$ROOT_AUTHORIZED_KEYS"
+
   if ! root_pubkey_sync_required; then
     chmod 700 "$ssh_directory"
     [ ! -f "$authorized_keys" ] || chmod 600 "$authorized_keys"
@@ -665,9 +745,9 @@ configure_authorized_keys() {
 
   temporary_file="$(mktemp "${authorized_keys}.tmp.XXXXXX")"
   if [ -f "$authorized_keys" ]; then
-    awk 'NF && !seen[$0]++' "$authorized_keys" "$ROOT_AUTHORIZED_KEYS" > "$temporary_file"
+    { cat "$authorized_keys"; usable_pubkey_lines "$pubkey_source"; } | awk 'NF && !seen[$0]++' > "$temporary_file"
   else
-    awk 'NF && !seen[$0]++' "$ROOT_AUTHORIZED_KEYS" > "$temporary_file"
+    usable_pubkey_lines "$pubkey_source" | awk 'NF && !seen[$0]++' > "$temporary_file"
   fi
   [ -s "$temporary_file" ] || error "Refusing to install an empty authorized_keys file."
   chmod 600 "$temporary_file"
