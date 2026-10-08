@@ -26,7 +26,7 @@ curl() { fail "curl must not run when every sibling file is found locally"; }
 wget() { fail "wget must not run when every sibling file is found locally"; }
 
 assert_success install_hguard_cli
-for name in install-core.sh status.sh uninstall.sh verify.sh update.sh; do
+for name in install-core.sh status.sh uninstall.sh verify.sh update.sh apt-hook.sh; do
   [ -f "${HGUARD_LIB_DIR}/${name}" ] || fail "install_hguard_cli did not install ${name}"
   mode="$(stat -c '%a' "${HGUARD_LIB_DIR}/${name}" 2>/dev/null || stat -f '%Lp' "${HGUARD_LIB_DIR}/${name}")"
   assert_equal 755 "$mode" "${name} is installed executable"
@@ -65,6 +65,7 @@ curl() {
     */uninstall.sh) cp "$TEST_ROOT/uninstall.sh" "$out" ;;
     */verify.sh) cp "$TEST_ROOT/verify.sh" "$out" ;;
     */update.sh) cp "$TEST_ROOT/update.sh" "$out" ;;
+    */apt-hook.sh) cp "$TEST_ROOT/apt-hook.sh" "$out" ;;
     *) return 1 ;;
   esac
 }
@@ -75,10 +76,10 @@ export -f curl
   HGUARD_TEST_MODE=1 HGUARD_LIB_MODE=1 HGUARD_LIB_DIR="$HGUARD_LIB_DIR" HGUARD_BIN_DIR="$HGUARD_BIN_DIR" HGUARD_CLI_PATH="$HGUARD_CLI_PATH" \
     bash -c '. ./install-core.sh; install_hguard_cli'
 )
-for name in status.sh uninstall.sh verify.sh update.sh; do
+for name in status.sh uninstall.sh verify.sh update.sh apt-hook.sh; do
   [ -f "${HGUARD_LIB_DIR}/${name}" ] || fail "one-click install_hguard_cli did not fetch ${name}"
 done
 [ -f "${HGUARD_LIB_DIR}/install-core.sh" ] || fail "install-core.sh itself (found locally, not fetched) was not installed"
-assert_equal 4 "$(wc -l < "$fetch_log" | tr -d ' ')" "exactly the 4 missing siblings were fetched, not install-core.sh itself"
+assert_equal 5 "$(wc -l < "$fetch_log" | tr -d ' ')" "exactly the 5 missing siblings were fetched, not install-core.sh itself"
 
 pass "install_hguard_cli fetches missing sibling files when run from a one-click (single-file) install"

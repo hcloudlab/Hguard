@@ -24,6 +24,8 @@ HGUARD_STATE_FILE="${HGUARD_STATE_FILE:-${HGUARD_STATE_DIR}/state.env}"
 HGUARD_MANAGED_RULES="${HGUARD_MANAGED_RULES:-${HGUARD_STATE_DIR}/managed-rules}"
 HGUARD_INSTALLED_MARKER="${HGUARD_INSTALLED_MARKER:-${HGUARD_STATE_DIR}/.installed}"
 HGUARD_PENDING_PORT_MARKER="${HGUARD_PENDING_PORT_MARKER:-${HGUARD_STATE_DIR}/.pending-port-finalization}"
+HGUARD_APT_HOOK_STATE_FILE="${HGUARD_APT_HOOK_STATE_FILE:-${HGUARD_STATE_DIR}/apt-hook-verify.env}"
+HGUARD_APT_HOOK_VERSIONS_FILE="${HGUARD_APT_HOOK_VERSIONS_FILE:-${HGUARD_STATE_DIR}/apt-hook-versions.env}"
 
 SSHD_CONFIG="${SSHD_CONFIG:-${HGUARD_ETC_ROOT}/ssh/sshd_config}"
 SSHD_CONFIG_DIR="${SSHD_CONFIG_DIR:-${HGUARD_ETC_ROOT}/ssh/sshd_config.d}"
@@ -44,6 +46,9 @@ ROOT_AUTHORIZED_KEYS="${ROOT_AUTHORIZED_KEYS:-/root/.ssh/authorized_keys}"
 HGUARD_BIN_DIR="${HGUARD_BIN_DIR:-/usr/local/sbin}"
 HGUARD_LIB_DIR="${HGUARD_LIB_DIR:-/usr/local/lib/hguard}"
 HGUARD_CLI_PATH="${HGUARD_CLI_PATH:-${HGUARD_BIN_DIR}/hguard}"
+APT_CONF_DIR="${APT_CONF_DIR:-/etc/apt/apt.conf.d}"
+HGUARD_APT_HOOK_FILE="${HGUARD_APT_HOOK_FILE:-${APT_CONF_DIR}/99-hguard-verify}"
+HGUARD_APT_HOOK_SCRIPT="${HGUARD_APT_HOOK_SCRIPT:-${HGUARD_LIB_DIR}/apt-hook.sh}"
 # Deliberately NOT overridable via environment (no ${VAR:-default} pattern),
 # unlike every other constant in this file: this one controls where root
 # fetches code that then gets installed executable and later run as root
@@ -624,6 +629,53 @@ resolve_ssh_ports() {
 
   resolve_port_migration_requirement "$configured_port"
   info "SSH port plan: original=${ORIGINAL_SSH_PORT}, target=${SSH_PORT}, migration-required=${PORT_MIGRATION_REQUIRED}"
+}
+
+# Fixed scope, shared by `hguard update` and the apt Post-Invoke hook: only
+# these five packages are ever subject to an update-time upgrade or a
+# version-change check. Never the kernel, never Hguard's own scripts (there
+# is no self-update).
+HGUARD_MANAGED_PACKAGES="openssh-server ufw fail2ban python3-systemd sudo"
+
+# "<installed> <candidate>" for one package, via apt-cache policy - a single
+# read-only call gives both without an install/simulate side-effect risk.
+package_versions() {
+  local package="$1"
+  local policy_output installed candidate
+
+  policy_output="$(apt-cache policy "$package" 2>/dev/null)" || return 1
+  installed="$(printf '%s\n' "$policy_output" | awk '/^ *Installed:/ {print $2; exit}')"
+  candidate="$(printf '%s\n' "$policy_output" | awk '/^ *Candidate:/ {print $2; exit}')"
+  [ -n "$installed" ] && [ "$installed" != "(none)" ] || return 1
+  printf '%s %s\n' "$installed" "$candidate"
+}
+
+# Packages (of HGUARD_MANAGED_PACKAGES) whose installed and candidate
+# versions differ, one per line as "<package> <installed> <candidate>".
+upgradable_managed_packages() {
+  local package installed candidate
+  for package in $HGUARD_MANAGED_PACKAGES; do
+    # `read ... <<< "$cmdsub"` always "succeeds" (the herestring is never
+    # truly empty - it has at least a newline), even when package_versions
+    # failed and printed nothing; check $installed itself instead of
+    # relying on read's exit status.
+    read -r installed candidate <<< "$(package_versions "$package" 2>/dev/null)"
+    [ -n "$installed" ] || continue
+    [ "$installed" != "$candidate" ] || continue
+    printf '%s %s %s\n' "$package" "$installed" "$candidate"
+  done
+}
+
+# A single comparable snapshot of every managed package's installed
+# version, e.g. "openssh-server=1:9.6p1 ufw=0.36.2 ...". Used by the apt
+# hook to detect whether anything changed since the last apt run without
+# caring what the versions actually are.
+managed_package_version_snapshot() {
+  local package installed candidate
+  for package in $HGUARD_MANAGED_PACKAGES; do
+    read -r installed candidate <<< "$(package_versions "$package")" || true
+    printf '%s=%s ' "$package" "${installed:-absent}"
+  done
 }
 
 upgrade_system() {
@@ -2347,7 +2399,7 @@ resolve_display_ip() {
 # The five files that make up the hguard CLI once installed: this file
 # itself (constants/functions/installer) plus its lib-mode sibling scripts.
 hguard_cli_component_files() {
-  printf 'install-core.sh\nstatus.sh\nuninstall.sh\nverify.sh\nupdate.sh\n'
+  printf 'install-core.sh\nstatus.sh\nuninstall.sh\nverify.sh\nupdate.sh\napt-hook.sh\n'
 }
 
 fetch_hguard_component() {
@@ -2413,6 +2465,22 @@ esac
 "
   assert_managed_or_absent "$HGUARD_CLI_PATH"
   atomic_write "$HGUARD_CLI_PATH" 755 "$dispatcher_content"
+}
+
+# Installs the apt Post-Invoke hook that runs apt-hook.sh (already placed
+# in HGUARD_LIB_DIR by install_hguard_cli) after every apt invocation. The
+# hook itself decides whether anything actually needs verifying (see
+# apt-hook.sh / managed_package_version_snapshot) and always exits 0 - this
+# function only ever writes the two static files that wire it up.
+install_apt_hook() {
+  local hook_content
+
+  [ -d "$APT_CONF_DIR" ] || return 1
+  hook_content="# ${MANAGED_MARKER} ${HGUARD_VERSION}
+DPkg::Post-Invoke { \"${HGUARD_APT_HOOK_SCRIPT} || true\"; };
+"
+  assert_managed_or_absent "$HGUARD_APT_HOOK_FILE"
+  atomic_write "$HGUARD_APT_HOOK_FILE" 644 "$hook_content"
 }
 
 print_final_summary() {
@@ -2489,7 +2557,11 @@ main() {
 
   run_final_acceptance || error "Final acceptance failed. The installed marker was not written; keep the current SSH session open."
   remove_legacy_phase_markers
-  install_hguard_cli || warn "Could not install the hguard CLI (${HGUARD_CLI_PATH}); core hardening succeeded regardless."
+  if install_hguard_cli; then
+    install_apt_hook || warn "Could not install the apt verification hook (${HGUARD_APT_HOOK_FILE}); the hguard CLI is still usable."
+  else
+    warn "Could not install the hguard CLI (${HGUARD_CLI_PATH}); core hardening succeeded regardless."
+  fi
   print_final_summary
 }
 

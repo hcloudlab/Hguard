@@ -7,10 +7,6 @@ HGUARD_LIB_MODE=1
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/install-core.sh"
 
-# Fixed scope, per spec: only these five packages are ever touched here.
-# `hguard update` never upgrades anything else, never the kernel, and never
-# the Hguard scripts themselves (there is no self-update).
-UPDATE_MANAGED_PACKAGES="openssh-server ufw fail2ban python3-systemd sudo"
 ASSUME_YES="false"
 
 parse_update_args() {
@@ -20,30 +16,6 @@ parse_update_args() {
       --yes|-y) ASSUME_YES="true" ;;
       *) error "Unknown option: ${argument}" ;;
     esac
-  done
-}
-
-# "<installed> <candidate>" for one package, via apt-cache policy - a single
-# read-only call gives both without an install/simulate side-effect risk.
-package_versions() {
-  local package="$1"
-  local policy_output installed candidate
-
-  policy_output="$(apt-cache policy "$package" 2>/dev/null)" || return 1
-  installed="$(printf '%s\n' "$policy_output" | awk '/^ *Installed:/ {print $2; exit}')"
-  candidate="$(printf '%s\n' "$policy_output" | awk '/^ *Candidate:/ {print $2; exit}')"
-  [ -n "$installed" ] && [ "$installed" != "(none)" ] || return 1
-  printf '%s %s\n' "$installed" "$candidate"
-}
-
-# Packages (of the fixed scope) whose installed and candidate versions
-# differ, one per line as "<package> <installed> <candidate>".
-upgradable_managed_packages() {
-  local package installed candidate
-  for package in $UPDATE_MANAGED_PACKAGES; do
-    read -r installed candidate <<< "$(package_versions "$package")" || continue
-    [ "$installed" != "$candidate" ] || continue
-    printf '%s %s %s\n' "$package" "$installed" "$candidate"
   done
 }
 

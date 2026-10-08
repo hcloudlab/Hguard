@@ -76,6 +76,33 @@ conntrack_runtime_profile_state() {
   fi
 }
 
+print_managed_components_status() {
+  local package installed candidate apt_hook_timestamp apt_hook_result
+
+  section "Managed components"
+  for package in $HGUARD_MANAGED_PACKAGES; do
+    read -r installed candidate <<< "$(package_versions "$package" 2>/dev/null)"
+    if [ -z "$installed" ]; then
+      printf '%s: not installed\n' "$package"
+    elif [ "$installed" != "$candidate" ]; then
+      printf '%s: %s (upgradable to %s)\n' "$package" "$installed" "$candidate"
+    else
+      printf '%s: %s (up to date)\n' "$package" "$installed"
+    fi
+  done
+  if ! apt_hook_timestamp="$(read_env_value "$HGUARD_APT_HOOK_STATE_FILE" TIMESTAMP 2>/dev/null)"; then
+    apt_hook_timestamp=""
+  fi
+  if ! apt_hook_result="$(read_env_value "$HGUARD_APT_HOOK_STATE_FILE" RESULT 2>/dev/null)"; then
+    apt_hook_result=""
+  fi
+  if [ -n "$apt_hook_result" ]; then
+    printf 'Last apt-hook verification: %s (%s)\n' "$apt_hook_result" "$apt_hook_timestamp"
+  else
+    printf 'Last apt-hook verification: never run\n'
+  fi
+}
+
 print_conntrack_status() {
   local fields count maximum usage hashsize table_full health runtime_profile
 
@@ -254,6 +281,8 @@ main() {
   printf 'Installed marker: %s\n' "$([ -f "$HGUARD_INSTALLED_MARKER" ] && printf present || printf missing)"
   printf 'Config: %s\n' "$HGUARD_CONFIG_FILE"
   printf 'State: %s\n' "$HGUARD_STATE_FILE"
+
+  print_managed_components_status
 
   section "Managed administrator"
   printf 'Username: %s\n' "${managed_user:-not-configured}"

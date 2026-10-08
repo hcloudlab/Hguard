@@ -139,4 +139,23 @@ critical_output="$(print_conntrack_status)"
 printf '%s\n' "$critical_output" | grep -Fq 'Health: CRITICAL' || fail "status conntrack table-full output is missing"
 printf '%s\n' "$critical_output" | grep -Fq 'Linux has dropped packets' || fail "status conntrack warning is missing"
 
+apt-cache() {
+  [ "$1" = "policy" ] || return 1
+  case "$2" in
+    sudo) printf 'sudo:\n  Installed: 1.0\n  Candidate: 2.0\n' ;;
+    *) printf '%s:\n  Installed: (none)\n  Candidate: 1.0\n' "$2" ;;
+  esac
+}
+components_output="$(print_managed_components_status)"
+printf '%s\n' "$components_output" | grep -Fq 'sudo: 1.0 (upgradable to 2.0)' || fail "upgradable managed component is not reported"
+printf '%s\n' "$components_output" | grep -Fq 'ufw: not installed' || fail "a not-installed managed component is not reported"
+printf '%s\n' "$components_output" | grep -Fq 'Last apt-hook verification: never run' || fail "missing apt-hook state should report never run"
+
+mkdir -p "$(dirname "$HGUARD_APT_HOOK_STATE_FILE")"
+printf "TIMESTAMP='2026-10-08T00:00:00Z'\nRESULT='PASS'\n" > "$HGUARD_APT_HOOK_STATE_FILE"
+components_output="$(print_managed_components_status)"
+printf '%s\n' "$components_output" | grep -Fq 'Last apt-hook verification: PASS (2026-10-08T00:00:00Z)' || fail "recorded apt-hook verification result is not reported"
+
+pass "status reports each managed component's version and the apt hook's last verification result"
+
 pass "status reports SSH listeners, behavior-based sudo mode details and conntrack health"
