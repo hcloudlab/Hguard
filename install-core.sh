@@ -2238,7 +2238,14 @@ verify_config_permissions() {
   [ "$owner" = "root:root" ] && [ "$mode" = "600" ]
 }
 
-run_final_acceptance() {
+# Read-only: the actual acceptance checks, and nothing else. Used by
+# run_final_acceptance (below) during install, and directly by `hguard
+# verify` (bin/hguard-verify.sh) for a read-only recheck that must never
+# write config/state - only this function's checks need to stay in sync
+# between the two callers, not any side effect.
+# Prints "<failures> <warnings>" on success (always "succeeds" itself;
+# the caller decides what a nonzero failure count means).
+run_acceptance_checks() {
   local failures=0 warnings=0 current_cc current_qdisc
 
   id "$NEW_USER" >/dev/null 2>&1 || { warn "Acceptance: managed user missing."; failures=$((failures + 1)); }
@@ -2261,6 +2268,16 @@ run_final_acceptance() {
   if [ "$current_cc" != "bbr" ] || [ "$current_qdisc" != "fq" ]; then
     warnings=$((warnings + 1))
   fi
+
+  printf '%s %s\n' "$failures" "$warnings"
+}
+
+run_final_acceptance() {
+  local failures warnings
+
+  # run_acceptance_checks' warn() calls print to stdout too, ahead of its
+  # final "<failures> <warnings>" line - take only the last line.
+  read -r failures warnings <<< "$(run_acceptance_checks | tail -n1)"
 
   [ "$failures" -eq 0 ] || return 1
   if [ "$INSTALL_STATUS" = "pending-port-finalization" ]; then
