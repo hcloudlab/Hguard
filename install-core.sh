@@ -595,7 +595,7 @@ upgrade_system() {
   export NEEDRESTART_MODE=l
   apt-get update
   if [ ! -s "$VPSGUARD_INSTALLED_MARKER" ]; then
-    DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y
+    DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y --with-new-pkgs
   fi
   DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install -y sudo curl wget git vim nano unzip ufw fail2ban python3-systemd htop jq ca-certificates gnupg lsb-release net-tools iproute2 openssh-server
 }
@@ -2184,6 +2184,9 @@ print_final_summary() {
   printf '%bDo not close the current session until remote login and sudo are verified.%b\n' "$YELLOW" "$NC"
   if [ "$INSTALL_STATUS" = "pending-port-finalization" ]; then
     warn "Old SSH port ${ORIGINAL_SSH_PORT} is intentionally retained. Rerun VPSGuard after remote validation to finalize."
+  fi
+  if [ -f "${VPSGUARD_RUN_ROOT}/reboot-required" ]; then
+    warn "系统更新需要重启才能完全生效，确认新管理员登录正常后再手动重启。"
   fi
 }
 

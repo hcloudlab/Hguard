@@ -20,6 +20,8 @@ export CONNTRACK_MODPROBE_FILE="$temporary_root/etc/modprobe.d/vpsguard-nf-connt
 export CONNTRACK_MODULES_FILE="$temporary_root/etc/modules-load.d/vpsguard-conntrack.conf"
 export CONNTRACK_HELPER_FILE="$temporary_root/etc/vpsguard/apply-conntrack-profile.sh"
 export CONNTRACK_SERVICE_FILE="$temporary_root/etc/systemd/system/vpsguard-conntrack.service"
+export VPSGUARD_RUN_ROOT="$temporary_root/run"
+mkdir -p "$VPSGUARD_RUN_ROOT"
 # shellcheck source=install.sh
 . "$TEST_ROOT/install.sh"
 
@@ -79,6 +81,8 @@ pass "is_private_ipv4 covers RFC 1918 and RFC 6598 ranges and their boundaries"
 # A cloud VPC's private address (e.g. AWS's 172.31.x.x) must be hidden
 # behind the SERVER_IP placeholder, with a hint to use the console's public
 # IP instead - this is the exact AWS scenario found in testing.
+# Called indirectly by print_final_summary.
+# shellcheck disable=SC2329
 hostname() { [ "$1" = "-I" ] && printf '172.31.5.20 fe80::1\n'; }
 summary_output="$(print_final_summary)"
 assert_file_contains /dev/stdin 'ssh -p 22 admin@SERVER_IP' <<<"$summary_output"
@@ -88,3 +92,19 @@ if printf '%s\n' "$summary_output" | grep -Fq 'admin@172.31.5.20'; then
 fi
 
 pass "print_final_summary hides a private VPC IP behind SERVER_IP with a console hint"
+
+# /run/reboot-required must trigger a warning so the operator knows to
+# reboot manually after verifying the new admin can log in - the script
+# must never reboot on its own.
+hostname() { [ "$1" = "-I" ] && printf '203.0.113.5 fe80::1\n'; }
+summary_output="$(print_final_summary)"
+if printf '%s\n' "$summary_output" | grep -q '重启'; then
+  fail "no reboot warning should be printed when /run/reboot-required is absent"
+fi
+
+: > "$VPSGUARD_RUN_ROOT/reboot-required"
+summary_output="$(print_final_summary)"
+assert_file_contains /dev/stdin '系统更新需要重启才能完全生效' <<<"$summary_output"
+rm -f "$VPSGUARD_RUN_ROOT/reboot-required"
+
+pass "print_final_summary warns when /run/reboot-required exists, without rebooting"

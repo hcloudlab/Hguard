@@ -22,6 +22,7 @@ rm -f "$VPSGUARD_INSTALLED_MARKER"
 apt_calls=""
 upgrade_system
 assert_equal "true" "$(printf '%s' "$apt_calls" | grep -q 'upgrade -y' && echo true || echo false)" "first install runs full apt upgrade"
+assert_equal "true" "$(printf '%s' "$apt_calls" | grep -q 'upgrade -y --with-new-pkgs' && echo true || echo false)" "first install's apt upgrade allows new dependency packages (e.g. linux-aws kernel packages)"
 
 # Rerun: marker present with a successful status.
 printf 'success\n' > "$VPSGUARD_INSTALLED_MARKER"
