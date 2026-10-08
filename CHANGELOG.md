@@ -2,6 +2,48 @@
 
 All notable changes to VPSGuard are documented here.
 
+## [0.4.0] - unreleased
+
+Renamed VPSGuard to Hguard. Migration tests involving the real VPSGuard
+0.3.7 on-disk layout are still pending real-machine fixtures; this entry
+will be amended before release.
+
+### Added
+
+- A persistent `hguard` command (`/usr/local/sbin/hguard`, installed
+  automatically): `hguard status`, `hguard verify` (read-only acceptance
+  recheck), `hguard update` (upgrades only `openssh-server`, `ufw`,
+  `fail2ban`, `python3-systemd`, `sudo` - nothing else, no kernel, no
+  self-update), `hguard uninstall`, `hguard version`.
+- `hguard update` simulates the full apt plan first (`apt-get -s install
+  --only-upgrade`) and shows every package it would touch, not just the
+  five managed ones; refuses outright if the simulation would remove any
+  package.
+- An apt `DPkg::Post-Invoke` hook that runs `hguard verify --quiet` after
+  any apt run that changed a managed component's version, recording the
+  result for `hguard status` to show. Never fails the apt run itself.
+- Automatic one-time migration from an existing VPSGuard 0.3.7 install:
+  sshd, fail2ban, sudoers, BBR and conntrack configuration are each
+  migrated with "write new, validate, remove old, validate again" -
+  never a window where both or neither are in effect. `/etc/vpsguard` is
+  preserved as a backup, never deleted; `hguard status` warns (without
+  removing anything) if a VPSGuard-managed file reappears afterward.
+
+### Changed
+
+- All `VPSGUARD_*` environment variables renamed to `HGUARD_*` (`NEW_USER`,
+  `SSH_PORT`, `ALLOW_PORTS` unchanged); all managed filenames, the
+  ownership marker, and `CORE_URL`/GitHub links renamed from vpsguard/
+  VPSGuard to hguard/Hguard.
+- `status.sh` and `uninstall.sh` no longer duplicate install-core.sh's
+  constants and helper functions; both now source it directly (in a new
+  library mode that skips running its own installer `main()`). This
+  incidentally fixed two latent bugs in their own duplicated copies: the
+  ownership-marker check only looked at line 1 (missing markers on line 2,
+  e.g. the conntrack helper's shebang-first format), and the UFW rule
+  check only read `ufw status`, missing a rule UFW had accepted via
+  `ufw show added` but not yet reflected there.
+
 ## [0.3.7] - 2026-10-08
 
 Real-machine tested on AWS (Ubuntu 24.04, `ssh.socket`, cloud-init) and Vultr

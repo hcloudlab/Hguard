@@ -344,6 +344,45 @@ sudo bash install.sh --optimize-conntrack
 
 `hashsize` 持久化依赖 `modprobe.d`，通常需要下次加载模块或重启后确认。Hguard 不会为了应用 hashsize 卸载 `nf_conntrack` 模块，也不会自动重启服务器。`status.sh` 会显示 `Runtime profile: active`、`Runtime profile: drift detected`、`not configured` 或 `unavailable`；如果持久化文件存在但 reboot 后 timeout 恢复默认值，会明确显示 drift。
 
+## hguard 命令行工具
+
+安装完成后，Hguard 会把自己安装为一个常驻命令行工具：核心脚本和 `status.sh`/
+`uninstall.sh`/`verify.sh`/`update.sh`/`apt-hook.sh` 被复制到
+`/usr/local/lib/hguard/`，一个分发器脚本被写到 `/usr/local/sbin/hguard`。
+（这一步是 best-effort：如果失败只会警告，不会影响主体加固已经完成的安装。）
+
+```bash
+sudo hguard status      # 等同于 sudo bash status.sh，额外显示受管组件版本和 apt 钩子最近一次验证结果
+sudo hguard verify       # 只读验收检查，不修改任何文件或状态；--quiet 只保留一行结果
+sudo hguard update       # 只升级 openssh-server/ufw/fail2ban/python3-systemd/sudo 五个组件；--yes 跳过确认
+sudo hguard uninstall    # 等同于 sudo bash uninstall.sh，额外清理 hguard 命令本身和 apt 钩子
+hguard version           # 显示当前版本
+```
+
+`hguard update` 执行前会用 `apt-get -s install --only-upgrade` 模拟一遍，把
+**完整的 apt 计划**（不只是这五个组件）展示出来；如果模拟结果显示会删除任何包，
+会直接拒绝执行并说明原因，交给人工处理。Hguard 自身不提供自动更新——升级
+Hguard 本身请重新执行一键安装命令。
+
+### apt 验证钩子
+
+安装会在 `/etc/apt/apt.conf.d/` 写入一个 `DPkg::Post-Invoke` 钩子，每次
+`apt`/`apt-get` 操作后自动跑一次只读验证（`hguard verify --quiet`）——但只在
+受管组件的版本确实发生变化时才会真正执行检查，其他情况直接退出。钩子只做
+验证：不修改配置、不重启服务、无交互，且无论验证结果如何都以 0 退出，绝不会
+导致 apt 操作失败。结果可以在 `hguard status` 里看到。
+
+### 从 VPSGuard 迁移
+
+如果机器上已经有 VPSGuard（`/etc/vpsguard` 存在）而还没有 Hguard
+（`/etc/hguard` 不存在），安装器会在触碰系统之前先自动迁移：sshd、fail2ban、
+sudoers、BBR、conntrack 配置逐项迁移，每一项都是"先写新的、用对应工具验证通过、
+再删旧的、再验证一次"，不会出现新旧同时失效的空窗期；`/etc/vpsguard`
+本身永远保留作为备份，迁移成功后会在其中写一个 `MIGRATED-TO-HGUARD`
+说明文件。如果某一项迁移失败，会保留对应的旧配置继续生效，重新运行安装器即可
+重试。迁移后如果系统里又出现了 VPSGuard 标记的文件（比如又手动跑了一次旧版
+0.3.7 安装器），`hguard status` 会醒目警告并列出这些文件，但不会自动删除。
+
 ## 状态检查
 
 ```bash
