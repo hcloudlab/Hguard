@@ -62,6 +62,26 @@ remove_owned_file() {
   fi
 }
 
+# The dispatcher (HGUARD_CLI_PATH) is written via atomic_write with the
+# ownership marker, so managed_file_is_owned recognizes it directly. The
+# lib scripts under HGUARD_LIB_DIR are plain copies (no marker line) -
+# treat that whole directory as Hguard-owned only once the marked
+# dispatcher confirms this is really an Hguard-managed installation, same
+# "don't touch what we can't positively identify" rule as everything else.
+remove_hguard_cli_and_hook() {
+  remove_owned_file "$HGUARD_APT_HOOK_FILE"
+  if managed_file_is_owned "$HGUARD_CLI_PATH"; then
+    rm -f "$HGUARD_CLI_PATH"
+    info "Removed Hguard-managed file: ${HGUARD_CLI_PATH}"
+    if [ -d "$HGUARD_LIB_DIR" ]; then
+      rm -rf "$HGUARD_LIB_DIR"
+      info "Removed the hguard CLI library directory: ${HGUARD_LIB_DIR}"
+    fi
+  elif [ -e "$HGUARD_CLI_PATH" ]; then
+    warn "Preserved unrecognized file: ${HGUARD_CLI_PATH}"
+  fi
+}
+
 disable_owned_unit() {
   local unit_file="$1"
   local unit_name="$2"
@@ -326,6 +346,7 @@ main() {
   remove_owned_file "$BBR_MODULES_FILE"
   warn "Current kernel congestion-control state was not forced to another algorithm and no reboot was performed."
   cleanup_conntrack_artifacts
+  remove_hguard_cli_and_hook
 
   if [ "$sudo_mode" = "passwordless" ]; then
     if ! remove_passwordless_sudoers_safely "$managed_user"; then

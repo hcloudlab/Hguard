@@ -10,6 +10,11 @@ export HGUARD_TEST_MODE=1
 export HGUARD_ETC_ROOT="$temporary_root/etc"
 export HGUARD_STATE_DIR="$temporary_root/etc/hguard"
 export HGUARD_MANAGED_RULES="$HGUARD_STATE_DIR/managed-rules"
+export HGUARD_BIN_DIR="$temporary_root/usr/local/sbin"
+export HGUARD_LIB_DIR="$temporary_root/usr/local/lib/hguard"
+export HGUARD_CLI_PATH="$HGUARD_BIN_DIR/hguard"
+export APT_CONF_DIR="$temporary_root/etc/apt/apt.conf.d"
+export HGUARD_APT_HOOK_FILE="$APT_CONF_DIR/99-hguard-verify"
 # shellcheck source=uninstall.sh
 . "$TEST_ROOT/uninstall.sh"
 
@@ -251,3 +256,24 @@ assert_success managed_file_is_owned "$current_marker_file"
 assert_failure managed_file_is_owned "$legacy_marker_file"
 
 pass "any_generation_marker_owns recognizes both the current and legacy VPSGuard marker"
+
+# remove_hguard_cli_and_hook removes the dispatcher, its whole lib
+# directory, and the apt hook - but only once the dispatcher itself is
+# positively recognized as Hguard-managed; an unrecognized file at that
+# path must be preserved, same as everywhere else.
+mkdir -p "$HGUARD_LIB_DIR" "$APT_CONF_DIR" "$(dirname "$HGUARD_CLI_PATH")"
+printf '#!/usr/bin/env bash\n# Managed by Hguard 0.4.0\n' > "$HGUARD_CLI_PATH"
+printf '#!/usr/bin/env bash\n' > "${HGUARD_LIB_DIR}/status.sh"
+printf '# Managed by Hguard 0.4.0\nDPkg::Post-Invoke {};\n' > "$HGUARD_APT_HOOK_FILE"
+
+remove_hguard_cli_and_hook
+[ ! -e "$HGUARD_CLI_PATH" ] || fail "the hguard dispatcher was not removed"
+[ ! -d "$HGUARD_LIB_DIR" ] || fail "the hguard lib directory was not removed"
+[ ! -e "$HGUARD_APT_HOOK_FILE" ] || fail "the apt hook file was not removed"
+
+mkdir -p "$(dirname "$HGUARD_CLI_PATH")"
+printf '#!/usr/bin/env bash\necho not ours\n' > "$HGUARD_CLI_PATH"
+remove_hguard_cli_and_hook
+[ -e "$HGUARD_CLI_PATH" ] || fail "an unrecognized file at the hguard CLI path must be preserved, not removed"
+
+pass "remove_hguard_cli_and_hook removes the managed CLI/hook, and preserves an unrecognized dispatcher file"
