@@ -2,11 +2,28 @@
 
 All notable changes to VPSGuard are documented here.
 
-## [0.3.7] - 2026-10-07
+## [0.3.7] - 2026-10-08
+
+Real-machine tested on AWS (Ubuntu 24.04, `ssh.socket`, cloud-init) and Vultr
+(Ubuntu 24.04, `ssh.service`, a pre-existing proxy service).
+
+### Security
+
+- Never copy a forced-command SSH key (as shipped in root's `authorized_keys`
+  on AWS and other cloud images) into the new administrator's
+  `authorized_keys` - that key cannot be used for interactive login and
+  would lock the administrator out on first login; fall back to the
+  sudo-invoking user's key when root has none usable.
+- Fix a bug where, after a rerun, the administrator's `~/.ssh` directory
+  could end up owned by `root` instead of the administrator, silently
+  blocking all public-key login even though the install reported success.
+- Close a symlink-race window where a managed directory swapped for a
+  symlink between a safety check and the actual ownership/permission change
+  could make a privileged operation act on an attacker-chosen path instead.
 
 ### Fixed
 
-- Never enable UFW before allowing existing non-SSH listeners; add `ALLOW_PORTS` and `--ssh-only` for non-interactive installs.
+- Never enable UFW before allowing existing non-SSH listeners; add `ALLOW_PORTS` and `--ssh-only` for non-interactive installs, avoiding cutting off an already-running service such as a proxy.
 - Validate root's SSH key before touching the system, not partway through `configure_authorized_keys`.
 - Apply the conntrack profile once, after BBR, inside the normal install flow, instead of as a separate pre-invocation.
 - Pin `CORE_URL` to a version tag (`v<VERSION>`) instead of a commit SHA, and verify in CI that the tag matches `VERSION`.
@@ -20,6 +37,21 @@ All notable changes to VPSGuard are documented here.
 - Report the server IP from `hostname -I` only; remove the external `api.ipify.org` network call from the install summary.
 - Put the shebang first in the conntrack runtime helper script; the ownership marker is now recognized on line 1 or line 2 for compatibility with both old and new files.
 - Omit the IPv6 `ListenStream` line from the `ssh.socket` override when IPv6 is unavailable (`/proc/net/if_inet6` absent).
+- Also reload or restart a managed service when its actual runtime state is wrong, not only when its configuration file content changed.
+- Restrict supported Ubuntu releases to 22.04 and 24.04; refuse to run, before making any change, on an untested release such as 26.04.
+- Check for a conflicting cloud-init passwordless-sudo grant before running the (potentially multi-minute) system upgrade, not after.
+- Fix the interactive "which ports to allow" prompt so a bare port number allows every protocol detected listening on it, instead of silently keeping only the first one found when both TCP and UDP were listening on the same port.
+- Install missing dependency packages, including kernel packages such as `linux-aws`, during the first-install system upgrade instead of silently keeping them back; warn after install if a reboot is required to fully apply the update.
+- Fix `ss` output parsing so it works whether or not a protocol column is present, correcting both the non-SSH port survey (which previously misreported loopback-bound UDP ports as foreign TCP listeners) and the SSH listener check used by status reporting.
+- Only report the conntrack health check once per install, and never claim a first install's pre-install state was "already recorded" from an earlier run.
+- Stop needlessly reapplying - and logging as reapplied - an already-correct conntrack profile on every rerun.
+- Automatically exempt the installer's own SSH connection IP from fail2ban, so testing login with several local SSH keys in a row can no longer ban the installer's own address for an hour.
+
+### Improved
+
+- Skip the redundant "type YES to continue" confirmation when rerunning with the same already-managed administrator; it is now only asked when taking over a different, previously unmanaged existing account.
+- Warn that some cloud images enforce password-strength policies, and suggest a randomly generated password when setting up password-based sudo.
+- Show the same resolved IP - a real address when known, or a `SERVER_IP` placeholder with a hint to use the provider console's public IP for a private/VPC-internal address - in both the port-migration prompt and the final install summary, instead of only one of them doing so.
 
 ## [0.3.6] - 2026-08-21
 
