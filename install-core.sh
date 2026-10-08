@@ -44,7 +44,15 @@ ROOT_AUTHORIZED_KEYS="${ROOT_AUTHORIZED_KEYS:-/root/.ssh/authorized_keys}"
 HGUARD_BIN_DIR="${HGUARD_BIN_DIR:-/usr/local/sbin}"
 HGUARD_LIB_DIR="${HGUARD_LIB_DIR:-/usr/local/lib/hguard}"
 HGUARD_CLI_PATH="${HGUARD_CLI_PATH:-${HGUARD_BIN_DIR}/hguard}"
-HGUARD_RAW_BASE_URL="${HGUARD_RAW_BASE_URL:-https://raw.githubusercontent.com/hcloudlab/Hguard}"
+# Deliberately NOT overridable via environment (no ${VAR:-default} pattern),
+# unlike every other constant in this file: this one controls where root
+# fetches code that then gets installed executable and later run as root
+# via the hguard dispatcher. An env-var override here would let anything
+# that can set environment variables for the install process (e.g. sudo -E
+# with an inherited environment) redirect root into fetching and installing
+# attacker-controlled code. Matches install.sh's CORE_URL, which is
+# hardcoded for the same reason.
+HGUARD_RAW_BASE_URL="https://raw.githubusercontent.com/hcloudlab/Hguard"
 
 OPTIMIZE_CONNTRACK="false"
 REQUESTED_NEW_USER="${NEW_USER:-}"
