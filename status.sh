@@ -1,41 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HGUARD_VERSION="0.4.0"
-HGUARD_TEST_MODE="${HGUARD_TEST_MODE:-0}"
-HGUARD_PROC_ROOT="${HGUARD_PROC_ROOT:-/proc}"
-HGUARD_PROC_SYS_ROOT="${HGUARD_PROC_SYS_ROOT:-${HGUARD_PROC_ROOT}/sys}"
-HGUARD_SYS_MODULE_ROOT="${HGUARD_SYS_MODULE_ROOT:-/sys/module}"
-HGUARD_ETC_ROOT="${HGUARD_ETC_ROOT:-/etc}"
-HGUARD_STATE_DIR="${HGUARD_STATE_DIR:-${HGUARD_ETC_ROOT}/hguard}"
-HGUARD_CONFIG_FILE="${HGUARD_CONFIG_FILE:-${HGUARD_STATE_DIR}/config.env}"
-HGUARD_STATE_FILE="${HGUARD_STATE_FILE:-${HGUARD_STATE_DIR}/state.env}"
-HGUARD_INSTALLED_MARKER="${HGUARD_INSTALLED_MARKER:-${HGUARD_STATE_DIR}/.installed}"
-HGUARD_PENDING_PORT_MARKER="${HGUARD_PENDING_PORT_MARKER:-${HGUARD_STATE_DIR}/.pending-port-finalization}"
-HGUARD_SSHD_CONFIG="${HGUARD_SSHD_CONFIG:-${HGUARD_ETC_ROOT}/ssh/sshd_config.d/00-hguard.conf}"
-SYSTEMD_SYSTEM_DIR="${SYSTEMD_SYSTEM_DIR:-${HGUARD_ETC_ROOT}/systemd/system}"
-HGUARD_SSH_SOCKET_OVERRIDE="${HGUARD_SSH_SOCKET_OVERRIDE:-${SYSTEMD_SYSTEM_DIR}/ssh.socket.d/00-hguard.conf}"
-FAIL2BAN_JAIL="${FAIL2BAN_JAIL:-${HGUARD_ETC_ROOT}/fail2ban/jail.d/hguard-sshd.local}"
-SUDOERS_DIR="${SUDOERS_DIR:-${HGUARD_ETC_ROOT}/sudoers.d}"
-BBR_SYSCTL_FILE="${BBR_SYSCTL_FILE:-${HGUARD_ETC_ROOT}/sysctl.d/99-hguard-bbr.conf}"
-BBR_MODULES_FILE="${BBR_MODULES_FILE:-${HGUARD_ETC_ROOT}/modules-load.d/hguard-bbr.conf}"
-CONNTRACK_SYSCTL_FILE="${CONNTRACK_SYSCTL_FILE:-${HGUARD_ETC_ROOT}/sysctl.d/99-hguard-conntrack.conf}"
-CONNTRACK_MODPROBE_FILE="${CONNTRACK_MODPROBE_FILE:-${HGUARD_ETC_ROOT}/modprobe.d/hguard-nf-conntrack.conf}"
-CONNTRACK_MODULES_FILE="${CONNTRACK_MODULES_FILE:-${HGUARD_ETC_ROOT}/modules-load.d/hguard-conntrack.conf}"
-CONNTRACK_HELPER_FILE="${CONNTRACK_HELPER_FILE:-${HGUARD_STATE_DIR}/apply-conntrack-profile.sh}"
-CONNTRACK_SERVICE_NAME="${CONNTRACK_SERVICE_NAME:-hguard-conntrack.service}"
-CONNTRACK_SERVICE_FILE="${CONNTRACK_SERVICE_FILE:-${SYSTEMD_SYSTEM_DIR}/${CONNTRACK_SERVICE_NAME}}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HGUARD_LIB_MODE=1
+# shellcheck source=install-core.sh
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/install-core.sh"
 
-GREEN="\033[32m"
-YELLOW="\033[33m"
 CYAN="\033[36m"
-BOLD="\033[1m"
-NC="\033[0m"
 
 section() {
   printf '\n%b==> %s%b\n' "${CYAN}${BOLD}" "$1" "$NC"
 }
 
+# install-core.sh's ok()/warn() also append to HGUARD_LOG_FILE (the install
+# log). A read-only status report running repeatedly must not spam that log,
+# so override with the same non-logging behavior this file always had.
 ok() {
   printf '%b[OK]%b %s\n' "$GREEN" "$NC" "$1"
 }
@@ -44,150 +24,11 @@ warn() {
   printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "$1"
 }
 
-read_env_value() {
-  local file="$1"
-  local key="$2"
-  local value
-
-  [ -f "$file" ] || return 1
-  value="$(awk -F= -v wanted="$key" '$1 == wanted {sub(/^[^=]*=/, ""); print; exit}' "$file")"
-  [ -n "$value" ] || return 1
-  case "$value" in
-    \'*\') value="${value#\'}"; value="${value%\'}" ;;
-  esac
-  printf '%s\n' "$value"
-}
-
-is_unsigned_integer() {
-  [[ "${1:-}" =~ ^[0-9]+$ ]]
-}
-
-read_first_line() {
-  local file="$1"
-
-  [ -r "$file" ] || return 1
-  awk 'NF {print; exit}' "$file"
-}
-
-conntrack_count_file() {
-  printf '%s/net/netfilter/nf_conntrack_count\n' "$HGUARD_PROC_SYS_ROOT"
-}
-
-conntrack_max_file() {
-  printf '%s/net/netfilter/nf_conntrack_max\n' "$HGUARD_PROC_SYS_ROOT"
-}
-
-conntrack_hashsize_file() {
-  printf '%s/nf_conntrack/parameters/hashsize\n' "$HGUARD_SYS_MODULE_ROOT"
-}
-
-conntrack_timeout_file() {
-  printf '%s/net/netfilter/nf_conntrack_tcp_timeout_%s\n' "$HGUARD_PROC_SYS_ROOT" "$1"
-}
-
-conntrack_profile_syn_sent_target() {
-  printf '30\n'
-}
-
-conntrack_profile_syn_recv_target() {
-  printf '20\n'
-}
-
-conntrack_profile_time_wait_target() {
-  printf '30\n'
-}
-
-conntrack_read_count() {
-  read_first_line "$(conntrack_count_file)"
-}
-
-conntrack_read_max() {
-  read_first_line "$(conntrack_max_file)"
-}
-
-conntrack_read_hashsize() {
-  read_first_line "$(conntrack_hashsize_file)"
-}
-
-conntrack_usage_percent() {
-  local count="$1"
-  local maximum="$2"
-
-  is_unsigned_integer "$count" || return 1
-  is_unsigned_integer "$maximum" || return 1
-  [ "$maximum" -gt 0 ] || return 1
-  awk -v count="$count" -v maximum="$maximum" 'BEGIN {printf "%.1f", (count / maximum) * 100}'
-}
-
-conntrack_usage_tenths() {
-  local count="$1"
-  local maximum="$2"
-
-  is_unsigned_integer "$count" || return 1
-  is_unsigned_integer "$maximum" || return 1
-  [ "$maximum" -gt 0 ] || return 1
-  awk -v count="$count" -v maximum="$maximum" 'BEGIN {printf "%d", (count * 1000) / maximum}'
-}
-
-conntrack_table_full_state() {
-  local logs="" command_output
-
-  if [ -n "${HGUARD_CONNTRACK_LOG_TEXT+x}" ]; then
-    logs="$HGUARD_CONNTRACK_LOG_TEXT"
-  else
-    if command -v dmesg >/dev/null 2>&1 && command_output="$(dmesg 2>/dev/null)"; then
-      logs="${logs}${command_output}
-"
-    fi
-    if command -v journalctl >/dev/null 2>&1 && command_output="$(journalctl -k -b --no-pager 2>/dev/null)"; then
-      logs="${logs}${command_output}
-"
-    fi
-  fi
-
-  if printf '%s\n' "$logs" | grep -Fq 'nf_conntrack: table full, dropping packet'; then
-    printf 'yes\n'
-  elif [ -n "$logs" ] || [ -n "${HGUARD_CONNTRACK_LOG_TEXT+x}" ]; then
-    printf 'no\n'
-  else
-    printf 'unknown\n'
-  fi
-}
-
-classify_conntrack_health() {
-  local count="$1"
-  local maximum="$2"
-  local table_full="$3"
-  local usage_tenths
-
-  [ "$table_full" = "yes" ] && { printf 'CRITICAL\n'; return 0; }
-  if ! usage_tenths="$(conntrack_usage_tenths "$count" "$maximum")"; then
-    printf 'UNAVAILABLE\n'
-    return 0
-  fi
-  if [ "$usage_tenths" -ge 900 ]; then
-    printf 'CRITICAL\n'
-  elif [ "$usage_tenths" -ge 750 ]; then
-    printf 'WARNING\n'
-  elif [ "$usage_tenths" -ge 500 ]; then
-    printf 'NOTICE\n'
-  else
-    printf 'OK\n'
-  fi
-}
-
-conntrack_status_fields() {
-  local count maximum hashsize usage table_full health
-
-  if ! count="$(conntrack_read_count 2>/dev/null)"; then count="unavailable"; fi
-  if ! maximum="$(conntrack_read_max 2>/dev/null)"; then maximum="unavailable"; fi
-  if ! hashsize="$(conntrack_read_hashsize 2>/dev/null)"; then hashsize="unavailable"; fi
-  if ! usage="$(conntrack_usage_percent "$count" "$maximum" 2>/dev/null)"; then usage="unavailable"; fi
-  table_full="$(conntrack_table_full_state)"
-  health="$(classify_conntrack_health "$count" "$maximum" "$table_full")"
-  printf '%s|%s|%s|%s|%s|%s\n' "$count" "$maximum" "$usage" "$hashsize" "$table_full" "$health"
-}
-
+# install-core.sh's version has no "not configured" case: by the point it
+# runs during an install, optimize_conntrack has always just written the
+# managed files, so that case can't happen there. status.sh can run on a
+# machine that never opted into conntrack optimization at all, where "not
+# configured" is the accurate answer instead of "unavailable"/"drift".
 conntrack_runtime_profile_state() {
   local maximum hashsize syn_sent syn_recv time_wait
 
@@ -266,16 +107,6 @@ print_conntrack_status() {
   fi
 }
 
-ufw_rule_exists_from_text() {
-  local port="$1"
-  awk -v target="${port}/tcp" '$1 == target {found=1} END {exit !found}'
-}
-
-ufw_tcp_rule_exists() {
-  local port="$1"
-  ufw status 2>/dev/null | ufw_rule_exists_from_text "$port"
-}
-
 sshd_value() {
   local output="$1"
   local key="$2"
@@ -329,7 +160,6 @@ ssh_listener_present() {
   '
 }
 
-
 port_finalization_state() {
   local target_port="$1"
   local original_port="$2"
@@ -377,18 +207,6 @@ service_state() {
   else
     printf 'not-found\n'
   fi
-}
-
-sudo_policy_has_full_admin_from_text() {
-  awk '
-    /^[[:space:]]*\(ALL([[:space:]]*:[[:space:]]*ALL)?\)[[:space:]]+ALL[[:space:]]*$/ {found=1}
-    END {exit !found}
-  '
-}
-
-managed_file_is_owned() {
-  local file="$1"
-  [ -f "$file" ] && head -n 1 "$file" | grep -Eq '^# Managed by Hguard( |$)'
 }
 
 passwordless_sudo_effective_for_user() {

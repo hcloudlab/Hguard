@@ -1,38 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-HGUARD_VERSION="0.4.0"
-HGUARD_TEST_MODE="${HGUARD_TEST_MODE:-0}"
-HGUARD_ETC_ROOT="${HGUARD_ETC_ROOT:-/etc}"
-HGUARD_STATE_DIR="${HGUARD_STATE_DIR:-${HGUARD_ETC_ROOT}/hguard}"
-HGUARD_CONFIG_FILE="${HGUARD_CONFIG_FILE:-${HGUARD_STATE_DIR}/config.env}"
-HGUARD_STATE_FILE="${HGUARD_STATE_FILE:-${HGUARD_STATE_DIR}/state.env}"
-HGUARD_MANAGED_RULES="${HGUARD_MANAGED_RULES:-${HGUARD_STATE_DIR}/managed-rules}"
-HGUARD_INSTALLED_MARKER="${HGUARD_INSTALLED_MARKER:-${HGUARD_STATE_DIR}/.installed}"
-HGUARD_PENDING_PORT_MARKER="${HGUARD_PENDING_PORT_MARKER:-${HGUARD_STATE_DIR}/.pending-port-finalization}"
-SSHD_CONFIG="${SSHD_CONFIG:-${HGUARD_ETC_ROOT}/ssh/sshd_config}"
-HGUARD_SSHD_CONFIG="${HGUARD_SSHD_CONFIG:-${HGUARD_ETC_ROOT}/ssh/sshd_config.d/00-hguard.conf}"
-SYSTEMD_SYSTEM_DIR="${SYSTEMD_SYSTEM_DIR:-${HGUARD_ETC_ROOT}/systemd/system}"
-HGUARD_SSH_SOCKET_OVERRIDE="${HGUARD_SSH_SOCKET_OVERRIDE:-${SYSTEMD_SYSTEM_DIR}/ssh.socket.d/00-hguard.conf}"
-FAIL2BAN_JAIL="${FAIL2BAN_JAIL:-${HGUARD_ETC_ROOT}/fail2ban/jail.d/hguard-sshd.local}"
-SUDOERS_DIR="${SUDOERS_DIR:-${HGUARD_ETC_ROOT}/sudoers.d}"
-BBR_SYSCTL_FILE="${BBR_SYSCTL_FILE:-${HGUARD_ETC_ROOT}/sysctl.d/99-hguard-bbr.conf}"
-BBR_MODULES_FILE="${BBR_MODULES_FILE:-${HGUARD_ETC_ROOT}/modules-load.d/hguard-bbr.conf}"
-CONNTRACK_SYSCTL_FILE="${CONNTRACK_SYSCTL_FILE:-${HGUARD_ETC_ROOT}/sysctl.d/99-hguard-conntrack.conf}"
-CONNTRACK_MODPROBE_FILE="${CONNTRACK_MODPROBE_FILE:-${HGUARD_ETC_ROOT}/modprobe.d/hguard-nf-conntrack.conf}"
-CONNTRACK_MODULES_FILE="${CONNTRACK_MODULES_FILE:-${HGUARD_ETC_ROOT}/modules-load.d/hguard-conntrack.conf}"
-CONNTRACK_HELPER_FILE="${CONNTRACK_HELPER_FILE:-${HGUARD_STATE_DIR}/apply-conntrack-profile.sh}"
-CONNTRACK_SERVICE_NAME="${CONNTRACK_SERVICE_NAME:-hguard-conntrack.service}"
-CONNTRACK_SERVICE_FILE="${CONNTRACK_SERVICE_FILE:-${SYSTEMD_SYSTEM_DIR}/${CONNTRACK_SERVICE_NAME}}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HGUARD_LIB_MODE=1
+# shellcheck source=install-core.sh
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/install-core.sh"
 
-GREEN="\033[32m"
-YELLOW="\033[33m"
-RED="\033[31m"
-BOLD="\033[1m"
-NC="\033[0m"
-SSHD_INCLUDE_BEGIN="# BEGIN Hguard managed include"
-SSHD_INCLUDE_END="# END Hguard managed include"
-
+# install-core.sh's info()/warn()/error() also append to HGUARD_LOG_FILE.
+# Keep uninstall's own non-logging behavior, unchanged from before.
 info() {
   printf '%b[INFO]%b %s\n' "$GREEN" "$NC" "$1"
 }
@@ -46,40 +22,12 @@ error() {
   exit 1
 }
 
-read_env_value() {
-  local file="$1"
-  local key="$2"
-  local value
-
-  [ -f "$file" ] || return 1
-  value="$(awk -F= -v wanted="$key" '$1 == wanted {sub(/^[^=]*=/, ""); print; exit}' "$file")"
-  [ -n "$value" ] || return 1
-  case "$value" in
-    \'*\') value="${value#\'}"; value="${value%\'}" ;;
-  esac
-  printf '%s\n' "$value"
-}
-
-managed_file_is_owned() {
-  local file="$1"
-  [ -f "$file" ] && head -n 1 "$file" | grep -Eq '^# Managed by Hguard( |$)'
-}
-
-ufw_rule_exists_from_text() {
-  local port="$1"
-  awk -v target="${port}/tcp" '$1 == target {found=1} END {exit !found}'
-}
-
-ufw_tcp_rule_exists() {
-  local port="$1"
-  ufw status 2>/dev/null | ufw_rule_exists_from_text "$port"
-}
-
-unit_exists() {
-  local unit="$1"
-  systemctl list-unit-files "$unit" --no-legend 2>/dev/null | awk -v wanted="$unit" '$1 == wanted {found=1} END {exit !found}'
-}
-
+# Deliberately not install-core.sh's apply_ssh_runtime(): that version
+# depends on detect_ssh_runtime_mode()'s install-flow-only state
+# ($SSH_RUNTIME_MODE/$SSH_SERVICE_UNIT) and has materially different
+# fallback logic. Uninstall's own self-contained version predates that
+# function and is kept as-is rather than risk changing behavior on the
+# SSH-safety-critical removal path.
 apply_ssh_runtime() {
   local service_unit="ssh.service"
 
@@ -284,13 +232,6 @@ remove_ssh_snippet_safely() {
   fi
   warn "SSH restoration could not be validated; the Hguard policy was restored."
   return 1
-}
-
-sudo_policy_has_full_admin_from_text() {
-  awk '
-    /^[[:space:]]*\(ALL([[:space:]]*:[[:space:]]*ALL)?\)[[:space:]]+ALL[[:space:]]*$/ {found=1}
-    END {exit !found}
-  '
 }
 
 remove_passwordless_sudoers_safely() {

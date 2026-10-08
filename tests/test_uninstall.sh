@@ -209,3 +209,27 @@ if grep -Fq 'Hguard managed include' "$SSHD_CONFIG"; then
 fi
 
 pass "uninstall removes only owned policy/rules and preserves standard sudo, vendor SSH, services and users"
+
+# Regression: before uninstall.sh shared install-core.sh's managed_file_is_owned
+# via HGUARD_LIB_MODE sourcing, its own copy only checked line 1, so it never
+# recognized a marker on line 2 (the conntrack helper's shebang-first format,
+# e.g. CONNTRACK_HELPER_FILE) as Hguard-managed.
+two_line_marker_file="$temporary_root/shebang-first.sh"
+printf '#!/usr/bin/env bash\n# Managed by Hguard 0.4.0\n' > "$two_line_marker_file"
+assert_success managed_file_is_owned "$two_line_marker_file"
+
+pass "managed_file_is_owned recognizes the marker on line 2, not just line 1"
+
+# Regression: uninstall.sh's own ufw_tcp_rule_exists used to check only
+# `ufw status` and missed a rule that was added but not yet reflected there
+# (`ufw show added`). Sharing install-core.sh's version via HGUARD_LIB_MODE
+# picks up that check too.
+ufw() {
+  case "$1" in
+    status) printf 'Status: active\n' ;;
+    show) [ "$2" = "added" ] && printf 'ufw allow 2345/tcp\n' ;;
+  esac
+}
+assert_success ufw_tcp_rule_exists 2345
+
+pass "ufw_tcp_rule_exists also checks ufw show added, not just ufw status"
