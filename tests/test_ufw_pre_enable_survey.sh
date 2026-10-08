@@ -77,3 +77,27 @@ configure_ufw_before_ssh
 assert_equal "recorded:443/tcp" "$(cat "$temporary_root/recorded")" "ALLOW_PORTS=443/tcp records that port"
 
 pass "configure_ufw_before_ssh gates correctly in non-interactive mode"
+
+# select_ports_from_survey: interactive selection accepts the same token
+# format as ALLOW_PORTS. A bare port number must allow every protocol the
+# survey found on it - previously it silently took only the first matching
+# survey row, i.e. TCP whenever a port had both TCP and UDP listeners,
+# because survey_foreign_listening_ports always lists TCP rows first.
+survey='443/tcp	nginx
+443/udp	quic-app
+8443/udp	myapp'
+
+assert_equal "443/tcp
+443/udp" "$(select_ports_from_survey "$survey" 443)" "a bare port allows every detected protocol on it"
+
+assert_equal "443/tcp" "$(select_ports_from_survey "$survey" 443/tcp)" "port/tcp allows only tcp"
+assert_equal "443/udp" "$(select_ports_from_survey "$survey" 443/udp)" "port/udp allows only udp"
+
+if (select_ports_from_survey "$survey" 443/sctp) 2>/dev/null; then
+  fail "select_ports_from_survey should reject a protocol other than tcp/udp"
+fi
+if (select_ports_from_survey "$survey" 9999) 2>/dev/null; then
+  fail "select_ports_from_survey should reject a port not in the survey"
+fi
+
+pass "select_ports_from_survey accepts ALLOW_PORTS-style tokens; bare ports allow all detected protocols"

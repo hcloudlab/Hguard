@@ -1145,16 +1145,32 @@ survey_foreign_listening_ports() {
   '
 }
 
+# Accepts the same token format as ALLOW_PORTS: a bare port number (allow
+# every protocol the survey detected listening on it - previously this
+# silently allowed only the first-detected protocol, i.e. TCP whenever both
+# TCP and UDP were listening on the same port number, since survey_foreign_
+# listening_ports lists TCP listeners before UDP ones) or port/tcp,
+# port/udp to allow only that specific protocol.
 select_ports_from_survey() {
-  local survey="$1" selection="$2" chosen port proto
+  local survey="$1" selection="$2" chosen port proto matches
   [ -n "$selection" ] || return 0
   IFS=',' read -ra __chosen <<<"$selection"
   for chosen in "${__chosen[@]}"; do
     chosen="$(printf '%s' "$chosen" | tr -d '[:space:]')"
     [ -n "$chosen" ] || continue
-    proto="$(printf '%s\n' "$survey" | awk -F'\t' -v p="$chosen" '$1 ~ ("^" p "/") {print $1; exit}')"
-    [ -n "$proto" ] || error "所选端口 ${chosen} 不在检测到的列表中。"
-    printf '%s\n' "$proto"
+    if [[ "$chosen" == */* ]]; then
+      port="${chosen%%/*}"
+      proto="${chosen##*/}"
+      case "$proto" in
+        tcp|udp) ;;
+        *) error "所选端口 ${chosen} 的协议无效，只接受 tcp 或 udp。" ;;
+      esac
+      matches="$(printf '%s\n' "$survey" | awk -F'\t' -v p="${port}/${proto}" '$1 == p {print $1; exit}')"
+    else
+      matches="$(printf '%s\n' "$survey" | awk -F'\t' -v p="$chosen" '$1 ~ ("^" p "/") {print $1}')"
+    fi
+    [ -n "$matches" ] || error "所选端口 ${chosen} 不在检测到的列表中。"
+    printf '%s\n' "$matches"
   done
 }
 
@@ -1177,7 +1193,7 @@ configure_ufw_before_ssh() {
       elif [ -t 0 ]; then
         printf '检测到以下非 SSH 端口正在监听：\n'
         printf '%s\n' "$foreign" | awk -F'\t' '{print "  - " $1 " (" $2 ")"}'
-        printf '输入要放行的端口号（逗号分隔，可留空表示全部不放行，例如 443,8443）：'
+        printf '输入要放行的端口（逗号分隔，格式与 ALLOW_PORTS 一致：443、443/tcp 或 443/udp；纯端口号表示放行该端口上检测到的所有协议，可留空表示全部不放行，例如 443,8443/udp）：'
         read -r selection
         ports_to_allow="$(select_ports_from_survey "$foreign" "$selection")"
       else
