@@ -84,6 +84,9 @@ assert_equal incomplete \
   "missing target listener is incomplete"
 
 passwordless_behavior="true"
+# Called indirectly by passwordless_sudo_effective_for_user below, and
+# later shadowed by another stub further down in this file.
+# shellcheck disable=SC2329
 sudo() {
   case "$*" in
     '-u statusadmin sudo -k') return 0 ;;
@@ -176,3 +179,52 @@ assert_equal "" "$(print_legacy_vpsguard_warning)" "no warning once the legacy f
 pass "status warns (without removing anything) when a VPSGuard-managed file reappears after migration"
 
 pass "status reports SSH listeners, behavior-based sudo mode details and conntrack health"
+
+### Item 5: on an ssh.service-mode machine, "Managed ssh.socket override:
+### missing" reads like something is wrong, when a socket override was
+### never applicable there to begin with. Must say so instead of
+### "missing".
+printf "NEW_USER='statusadmin'\nSSH_PORT='22'\nORIGINAL_SSH_PORT='22'\nSUDO_MODE='password'\nINSTALL_STATUS='success'\n" > "$HGUARD_CONFIG_FILE"
+id() { [ "${1:-}" = "-u" ] && printf '0\n' || return 0; }
+getent() { return 2; }
+sshd() { case "$1" in -t) return 0 ;; -T) printf 'port 22\npermitrootlogin no\npasswordauthentication no\npubkeyauthentication yes\n'; return 0 ;; *) return 0 ;; esac; }
+ss() { return 0; }
+ufw() { [ "$1" = status ] && printf 'Status: active\n22/tcp ALLOW Anywhere\n'; }
+fail2ban-client() { return 0; }
+sysctl() { return 0; }
+hostname() { printf 'statustest\n'; }
+visudo() { return 0; }
+# Called indirectly by main()'s passwordless_sudo_effective_for_user.
+# shellcheck disable=SC2329
+sudo() { return 1; }
+passwd() { return 1; }
+apt-cache() { [ "$1" = policy ] || return 1; printf '%s:\n  Installed: 1.0\n  Candidate: 1.0\n' "$2"; }
+
+# ssh.service mode: ssh.socket is not active (not-found).
+systemctl() {
+  case "$1" in
+    is-active) return 1 ;;
+    list-unit-files) [ "$2" = "ssh.service" ] && printf 'ssh.service\n'; return 0 ;;
+    *) return 0 ;;
+  esac
+}
+service_mode_output="$(main)"
+printf '%s\n' "$service_mode_output" | grep -Fq 'Managed ssh.socket override: not applicable (ssh.service mode)' \
+  || fail "ssh.service mode must report the socket override as not applicable, not missing"
+
+# ssh.socket mode: ssh.socket is active.
+systemctl() {
+  case "$1" in
+    is-active) [ "$2" = "--quiet" ] && [ "$3" = "ssh.socket" ] && return 0; return 1 ;;
+    list-unit-files) [ "$2" = "ssh.socket" ] && printf 'ssh.socket\n'; return 0 ;;
+    *) return 0 ;;
+  esac
+}
+socket_mode_output="$(main)"
+printf '%s\n' "$socket_mode_output" | grep -Fq 'Managed ssh.socket override: missing' \
+  || fail "ssh.socket mode must still report present/missing for the socket override"
+if printf '%s\n' "$socket_mode_output" | grep -Fq 'not applicable'; then
+  fail "ssh.socket mode must not report the socket override as not applicable"
+fi
+
+pass "status reports the ssh.socket override as not applicable in ssh.service mode instead of a misleading 'missing'"

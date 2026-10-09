@@ -399,7 +399,11 @@ main() {
   printf 'PasswordAuthentication: %s\n' "$(sshd_value "$effective_sshd" passwordauthentication)"
   printf 'PubkeyAuthentication: %s\n' "$(sshd_value "$effective_sshd" pubkeyauthentication)"
   printf 'Managed SSH snippet: %s\n' "$([ -f "$HGUARD_SSHD_CONFIG" ] && printf present || printf missing)"
-  printf 'Managed ssh.socket override: %s\n' "$([ -f "$HGUARD_SSH_SOCKET_OVERRIDE" ] && printf present || printf missing)"
+  if [ "$ssh_socket_state" = "active" ]; then
+    printf 'Managed ssh.socket override: %s\n' "$([ -f "$HGUARD_SSH_SOCKET_OVERRIDE" ] && printf present || printf missing)"
+  else
+    printf 'Managed ssh.socket override: not applicable (ssh.service mode)\n'
+  fi
   effective_socket_listeners=""
   if [ "$ssh_socket_state" = "active" ] && command -v systemctl >/dev/null 2>&1; then
     if ! effective_socket_listeners="$(systemctl show ssh.socket --property=Listen --value 2>/dev/null)"; then
