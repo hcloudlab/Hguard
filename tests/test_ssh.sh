@@ -89,11 +89,18 @@ systemctl() {
     *) return 1 ;;
   esac
 }
-detect_ssh_runtime_mode
-assert_equal socket "$SSH_RUNTIME_MODE" "socket runtime detection"
+# A subshell, not a direct call: this file later redefines detect_ssh_
+# runtime_mode as a hardcoded stub for a different scenario, and an
+# earlier call to the real function parsed together with that later
+# redefinition of the same name is exactly the shape the SC2218 check
+# ("this function is only defined later") flags. $SSH_RUNTIME_MODE
+# doesn't escape a subshell, so it's captured to a file instead.
+detected_runtime_mode_file="$temporary_root/detected-runtime-mode"
+( detect_ssh_runtime_mode; printf '%s\n' "$SSH_RUNTIME_MODE" > "$detected_runtime_mode_file" )
+assert_equal socket "$(cat "$detected_runtime_mode_file")" "socket runtime detection"
 mock_socket_present=false
-detect_ssh_runtime_mode
-assert_equal service "$SSH_RUNTIME_MODE" "service runtime detection without ssh.socket"
+( detect_ssh_runtime_mode; printf '%s\n' "$SSH_RUNTIME_MODE" > "$detected_runtime_mode_file" )
+assert_equal service "$(cat "$detected_runtime_mode_file")" "service runtime detection without ssh.socket"
 
 pass "SSH effective configuration, first-include policy, socket listeners and old-port staging"
 
@@ -134,7 +141,7 @@ printf 'Port 22\n' > "$SSHD_CONFIG"
 detect_ssh_runtime_mode() { SSH_RUNTIME_MODE="service"; SSH_SERVICE_UNIT="ssh.service"; }
 verify_effective_sshd_config() { return 0; }
 # Called below, before being redefined further down for the next scenario.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 verify_ssh_listener() { return 0; }
 ufw_tcp_rule_exists() { return 0; }
 apply_runtime_count=0

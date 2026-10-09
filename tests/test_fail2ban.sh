@@ -66,7 +66,7 @@ HGUARD_PENDING_PORT_MARKER="$temporary_root/.pending-port-finalization"
 rm -f "$HGUARD_PENDING_PORT_MARKER"
 restart_count=0
 # Called below, before being redefined further down for the next scenario.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 systemctl() {
   case "$*" in
     'enable fail2ban.service') return 0 ;;
@@ -75,7 +75,7 @@ systemctl() {
     *) return 1 ;;
   esac
 }
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 fail2ban-client() {
   [ "$1" = "-t" ] && return 0
   [ "$*" = "status sshd" ] && return 0
@@ -95,7 +95,7 @@ pass "configure_fail2ban skips the restart when the jail content is unchanged"
 restart_count=0
 service_active="false"
 # Called below, before being redefined further down for the next scenario.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 systemctl() {
   case "$*" in
     'enable fail2ban.service') return 0 ;;
@@ -113,7 +113,7 @@ restart_count=0
 service_active="true"
 sshd_jail_available="false"
 # Called below, before being redefined further down for the next scenario.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 systemctl() {
   case "$*" in
     'enable fail2ban.service') return 0 ;;
@@ -122,7 +122,7 @@ systemctl() {
     *) return 1 ;;
   esac
 }
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 fail2ban-client() {
   [ "$1" = "-t" ] && return 0
   [ "$*" = "status sshd" ] && [ "$sshd_jail_available" = "true" ]
@@ -147,7 +147,7 @@ assert_equal 203.0.113.5 "$(current_connection_ip)" "SSH_CONNECTION's first fiel
 # fallback.
 SSH_CONNECTION=""
 # Called indirectly by current_connection_ip.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 who() { [ "$1" = "-m" ] && printf 'admin    pts/0        2026-10-08 10:00 (198.51.100.42)\n'; }
 assert_equal 198.51.100.42 "$(current_connection_ip)" "who -m's address is used when SSH_CONNECTION is empty"
 

@@ -115,7 +115,7 @@ pass "package_versions/upgradable_managed_packages/simulation parsing match real
 
 ### End-to-end: nothing upgradable -> no-op, no apt-get mutation attempted.
 # Called below, before being redefined further down for the next scenario.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 apt-cache() {
   [ "$1" = "policy" ] || return 1
   case "$2" in

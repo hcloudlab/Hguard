@@ -47,7 +47,7 @@ pass "pre-install state is immutable and managed rules are unique"
 # no external network call.
 curl() { fail "print_final_summary must not call curl/network for the server IP"; }
 # Called indirectly by print_final_summary.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 hostname() { [ "$1" = "-I" ] && printf '203.0.113.5 fe80::1\n'; }
 NEW_USER="admin"
 SUDO_MODE="passwordless"
@@ -82,7 +82,7 @@ pass "is_private_ipv4 covers RFC 1918 and RFC 6598 ranges and their boundaries"
 # behind the SERVER_IP placeholder, with a hint to use the console's public
 # IP instead - this is the exact AWS scenario found in testing.
 # Called indirectly by print_final_summary.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 hostname() { [ "$1" = "-I" ] && printf '172.31.5.20 fe80::1\n'; }
 summary_output="$(print_final_summary)"
 assert_file_contains /dev/stdin 'ssh -p 22 admin@SERVER_IP' <<<"$summary_output"

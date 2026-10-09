@@ -471,6 +471,8 @@ shellcheck -x install.sh status.sh uninstall.sh tests/*.sh
 bash tests/run.sh
 ```
 
+本地开发使用 **ShellCheck 0.11.0**。CI 下载并校验同一固定版本的官方二进制（见 `.github/workflows/shell-ci.yml`），不使用 `apt`/`apt-get` 安装的发行版自带版本 —— 22.04 自带 0.8.0、24.04 自带 0.9.0，两者都会对本仓库报告本地 0.11.0 下不存在的误报（0.8.0 的 SC2218、0.9.0 的 SC2317），版本不一致会导致 CI 和本地结果不一致。升级本地 ShellCheck 版本时，请同步升级 CI 固定的版本号和 SHA256。
+
 GitHub Actions 在 Ubuntu 22.04 和 24.04 runner 上执行同样的静态与隔离测试，不进行真实远程 SSH 联调。
 
 ### 发版步骤

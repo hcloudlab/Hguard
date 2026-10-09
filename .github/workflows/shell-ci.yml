@@ -16,12 +16,29 @@ jobs:
       matrix:
         ubuntu: ["22.04", "24.04"]
 
+    env:
+      SHELLCHECK_VERSION: "0.11.0"
+      SHELLCHECK_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install ShellCheck
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      # Pinned to the same version used for local development (see
+      # README.md), not the distro package: Ubuntu 22.04 ships 0.8.0 and
+      # 24.04 ships 0.9.0, each with false positives the other (and local
+      # 0.11.0) doesn't have (0.8.0's SC2218, 0.9.0's SC2317) - a version
+      # mismatch between CI and local dev is what made CI permanently red
+      # even for an already-released, locally-clean version of this repo.
+      - name: Install ShellCheck (pinned version)
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" -o shellcheck.tar.xz
+          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
+          tar -xf shellcheck.tar.xz
+          sudo install -m 755 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          rm -rf shellcheck.tar.xz "shellcheck-v${SHELLCHECK_VERSION}"
+          shellcheck --version
 
       - name: Validate Bash syntax
         run: |

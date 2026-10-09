@@ -132,7 +132,7 @@ sshd() {
   esac
 }
 export -f sshd
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 fail2ban-client() { [ "$1" = "-t" ] && return 0; [ "$*" = "status sshd" ] && return 0; return 0; }
 export -f fail2ban-client
 systemctl() { return 0; }

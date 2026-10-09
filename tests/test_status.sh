@@ -86,7 +86,7 @@ assert_equal incomplete \
 passwordless_behavior="true"
 # Called indirectly by passwordless_sudo_effective_for_user below, and
 # later shadowed by another stub further down in this file.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 sudo() {
   case "$*" in
     '-u statusadmin sudo -k') return 0 ;;

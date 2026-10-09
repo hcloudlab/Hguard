@@ -180,15 +180,24 @@ pass "conntrack helper has the shebang first; the ownership marker is recognized
 # after a reboot that didn't pick up sysctl.d. Isolate this from the live
 # hashsize ratchet (which can make file content drift on its own across real
 # calls, confounding a black-box optimize_conntrack rerun) by stubbing both
-# collaborators directly - this is the last block in the file, so these stubs
-# never leak into an earlier test that needs the real functions.
-rm -f "$custom_sysctl"  # an earlier block's foreign file would make optimize_conntrack return early
-write_conntrack_files() { ATOMIC_WRITE_CHANGED="false"; }
-enable_conntrack_service() { :; }
-conntrack_runtime_profile_state() { printf 'drift detected\n'; }
-recorded_files_changed=""
-apply_conntrack_runtime_values() { recorded_files_changed="$2"; }
-optimize_conntrack >/dev/null
-assert_equal "true" "$recorded_files_changed" "unchanged files but non-active runtime state still forces files_changed=true"
+# collaborators directly - in a subshell, both to keep these redefinitions
+# from leaking into any later test (none exist today, but this keeps it
+# true by construction rather than by file position) and because an
+# earlier apply_conntrack_runtime_values call above, parsed together with
+# this later redefinition of the same name, is exactly the shape the
+# SC2218 check ("this function is only defined later") flags.
+recorded_files_changed_file="$temporary_root/recorded-files-changed"
+# Each stub below is called indirectly, by optimize_conntrack on the last
+# line of this subshell.
+# shellcheck disable=SC2317,SC2329
+(
+  rm -f "$custom_sysctl"  # an earlier block's foreign file would make optimize_conntrack return early
+  write_conntrack_files() { ATOMIC_WRITE_CHANGED="false"; }
+  enable_conntrack_service() { :; }
+  conntrack_runtime_profile_state() { printf 'drift detected\n'; }
+  apply_conntrack_runtime_values() { printf '%s\n' "$2" > "$recorded_files_changed_file"; }
+  optimize_conntrack >/dev/null
+)
+assert_equal "true" "$(cat "$recorded_files_changed_file")" "unchanged files but non-active runtime state still forces files_changed=true"
 
 pass "optimize_conntrack forces a reapply when runtime state is wrong, even if its managed files are unchanged"

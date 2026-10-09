@@ -20,9 +20,9 @@ mkdir -p "$HGUARD_STATE_DIR"
 ### install-core.sh (BASH_SOURCE[0], i.e. this repo), so nothing is fetched.
 # Called indirectly by fetch_hguard_component, if install_hguard_cli
 # wrongly decides a sibling needs fetching.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 curl() { fail "curl must not run when every sibling file is found locally"; }
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 wget() { fail "wget must not run when every sibling file is found locally"; }
 
 assert_success install_hguard_cli

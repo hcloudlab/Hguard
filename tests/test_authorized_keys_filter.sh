@@ -15,7 +15,7 @@ mkdir -p "$HGUARD_STATE_DIR"
 . "$TEST_ROOT/install-core.sh"
 
 # Called indirectly by ensure_admin_ssh_directory / configure_authorized_keys.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 chown() { :; }  # NEW_USER below is not a real OS account in this test sandbox
 
 export ROOT_AUTHORIZED_KEYS="$temporary_root/root-authorized_keys"
@@ -57,7 +57,7 @@ reset_sandbox
 printf '%s\n' "$restricted_line" > "$ROOT_AUTHORIZED_KEYS"
 export SUDO_USER="ubuntu"
 # Called indirectly by resolve_admin_pubkey_source.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 getent() {
   if [ "$1" = "passwd" ] && [ "$2" = "ubuntu" ]; then
     printf 'ubuntu:x:1000:1000::%s/home/ubuntu:/bin/bash\n' "$temporary_root"
@@ -103,7 +103,7 @@ reset_sandbox
 printf '%s\n' "$restricted_line" > "$ROOT_AUTHORIZED_KEYS"
 export SUDO_USER="ubuntu"
 # Called indirectly by resolve_admin_pubkey_source.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 getent() {
   if [ "$1" = "passwd" ] && [ "$2" = "ubuntu" ]; then
     printf 'ubuntu:x:1000:1000::%s/home/ubuntu:/bin/bash\n' "$temporary_root"
