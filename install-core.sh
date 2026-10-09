@@ -2661,6 +2661,74 @@ migrate_relabel_marker() {
   mv -f "$temporary_file" "$file"
 }
 
+# Like migrate_relabel_marker, but for a literal path string anywhere in
+# the file (not just the marker line): VPSGuard's own conntrack sysctl
+# template wrote a comment naming the conntrack modules-load file's path
+# by value, and migration's verbatim copy carries that literal old path
+# forward along with everything else. A no-op if the old string isn't
+# present.
+relabel_stale_path_reference() {
+  local file="$1" old="$2" new="$3"
+  local mode temporary_file
+
+  [ -f "$file" ] || return 0
+  grep -Fq "$old" "$file" 2>/dev/null || return 0
+  if ! mode="$(stat -c '%a' "$file" 2>/dev/null)"; then mode="$(stat -f '%Lp' "$file" 2>/dev/null)"; fi
+  [ -n "$mode" ] || mode=644
+  temporary_file="$(mktemp "${file}.relabel.XXXXXX")" || return 1
+  if ! sed "s#${old}#${new}#g" "$file" > "$temporary_file"; then
+    rm -f "$temporary_file"
+    return 1
+  fi
+  chmod "$mode" "$temporary_file"
+  mv -f "$temporary_file" "$file"
+}
+
+# Unconditional, independent of any change-detection gate: write_bbr_
+# files/write_conntrack_files only rewrite their files when the content
+# differs AND the runtime state is wrong (see atomic_write's change
+# detection), so a machine where migration (or an earlier, pre-relabel-
+# fix version of it) left an Hguard-named file carrying "Managed by
+# VPSGuard" - correct content otherwise, nothing to actually change -
+# never gets that marker corrected on any later rerun either, no matter
+# how many times the normal install flow runs. fail2ban/sshd/config.env
+# don't have this problem because they get rewritten from scratch every
+# run regardless of whether anything changed; BBR/conntrack do. Run this
+# every time, ahead of all of those, so a machine already stuck this way
+# self-heals on its very next run.
+relabel_stale_legacy_markers() {
+  local sudoers_file path
+
+  for path in \
+    "$HGUARD_SSHD_CONFIG" \
+    "$HGUARD_SSH_SOCKET_OVERRIDE" \
+    "$FAIL2BAN_JAIL" \
+    "$BBR_SYSCTL_FILE" \
+    "$BBR_MODULES_FILE" \
+    "$CONNTRACK_SYSCTL_FILE" \
+    "$CONNTRACK_MODPROBE_FILE" \
+    "$CONNTRACK_MODULES_FILE" \
+    "$CONNTRACK_HELPER_FILE" \
+    "$CONNTRACK_SERVICE_FILE" \
+    "$HGUARD_CONFIG_FILE" \
+    "$HGUARD_CLI_PATH" \
+    "$HGUARD_APT_HOOK_FILE"; do
+    legacy_marker_owns "$path" && migrate_relabel_marker "$path"
+  done
+
+  if [ -n "$NEW_USER" ]; then
+    sudoers_file="$(sudoers_file_for_user)"
+    legacy_marker_owns "$sudoers_file" && migrate_relabel_marker "$sudoers_file"
+  fi
+
+  # The conntrack sysctl file's own comment names the conntrack modules-
+  # load file by its old vpsguard path; fix that reference too, not just
+  # the marker above it.
+  relabel_stale_path_reference "$CONNTRACK_SYSCTL_FILE" \
+    "$VPSGUARD_LEGACY_CONNTRACK_MODULES_FILE" "$CONNTRACK_MODULES_FILE"
+  return 0
+}
+
 migrate_vpsguard_copy_state_files() {
   local src dest name temporary_file
 
@@ -2974,6 +3042,10 @@ main() {
   resolve_managed_user
   resolve_sudo_mode
   resolve_ssh_ports
+  # Unconditional, every run, independent of whether anything else below
+  # changes: see relabel_stale_legacy_markers's own comment for why BBR/
+  # conntrack specifically need this even though fail2ban/sshd don't.
+  relabel_stale_legacy_markers
   check_root_ssh_key
   check_sudo_mode_compatibility
   INSTALL_STATUS="failed"
