@@ -2783,10 +2783,35 @@ ${VPSGUARD_LEGACY_CONNTRACK_MODULES_FILE}:${CONNTRACK_MODULES_FILE}"
 }
 
 migrate_vpsguard_conntrack_service() {
+  local service_content
+
   [ -f "$VPSGUARD_LEGACY_CONNTRACK_SERVICE_FILE" ] || return 0
   command -v systemctl >/dev/null 2>&1 || return 0
 
-  cp -p "$VPSGUARD_LEGACY_CONNTRACK_SERVICE_FILE" "$CONNTRACK_SERVICE_FILE"
+  # Not a verbatim cp: the unit's ExecStart points at the legacy helper
+  # script path, which migrate_vpsguard_bbr_and_conntrack_files has
+  # already copied forward and deleted by the time this runs. Regenerate
+  # the unit with the current ExecStart path instead of carrying over a
+  # reference to a file that no longer exists.
+  service_content="# Managed by Hguard ${HGUARD_VERSION}; optional conntrack runtime floor.
+[Unit]
+Description=Apply Hguard conntrack runtime profile
+Documentation=https://github.com/hcloudlab/Hguard
+DefaultDependencies=no
+Wants=systemd-modules-load.service
+After=systemd-modules-load.service systemd-sysctl.service
+Before=network-pre.target ufw.service
+ConditionPathExists=/proc/sys/net/netfilter/nf_conntrack_max
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash ${CONNTRACK_HELPER_FILE}
+
+[Install]
+WantedBy=sysinit.target
+"
+  atomic_write "$CONNTRACK_SERVICE_FILE" 644 "$service_content"
   systemctl daemon-reload
   if ! systemctl enable "$CONNTRACK_SERVICE_NAME" >/dev/null 2>&1; then
     rm -f "$CONNTRACK_SERVICE_FILE"
