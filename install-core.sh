@@ -2505,8 +2505,8 @@ install_hguard_cli() {
   done < <(hguard_cli_component_files)
 
   dispatcher_content="#!/usr/bin/env bash
-set -euo pipefail
 # ${MANAGED_MARKER} ${HGUARD_VERSION}
+set -euo pipefail
 HGUARD_LIB_DIR=\"${HGUARD_LIB_DIR}\"
 case \"\${1:-}\" in
   status) shift; exec bash \"\${HGUARD_LIB_DIR}/status.sh\" \"\$@\" ;;

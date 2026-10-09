@@ -37,6 +37,17 @@ assert_file_contains "$HGUARD_CLI_PATH" "# Managed by Hguard"
 
 pass "install_hguard_cli installs every sibling file locally without any network fetch"
 
+### 1b. Rerunning install_hguard_cli against its own previous output must
+### succeed - the dispatcher's own ownership marker used to sit on line 3
+### (after the shebang and `set -euo pipefail`), past assert_managed_or_
+### absent's `head -n 2` check, so every second run refused to overwrite
+### it and hard-exited via error(). Any future "writes a managed file"
+### helper needs this same run-it-twice coverage.
+assert_success install_hguard_cli
+assert_file_contains "$HGUARD_CLI_PATH" "# Managed by Hguard"
+
+pass "install_hguard_cli succeeds on a second run against its own previous output"
+
 ### 2. One-click case: no sibling files on disk next to install-core.sh (as
 ### if only install-core.sh itself had been downloaded) - everything else
 ### must be fetched via HGUARD_RAW_BASE_URL.
