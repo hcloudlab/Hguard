@@ -217,6 +217,46 @@ assert_file_contains "$HGUARD_APT_HOOK_FILE" "# Managed by Hguard"
 
 pass "migration + a full real main() correctly migrate a real Vultr (ssh.service, port 22222, UFW rules, conntrack) VPSGuard 0.3.7 layout"
 
+### Run the actually-installed `hguard status` as a real subprocess
+### against this real-fixture migration - the previous round of bugs
+### (status.sh dying partway through under set -e on a half-migrated/
+### fresh machine) was invisible to direct function calls in this same
+### shell; only a real subprocess invocation of the installed dispatcher
+### catches it. HGUARD_TEST_MODE=0 here for the same reason as test_
+### installed_cli_dispatch.sh: status.sh has the same "only auto-run
+### main() when HGUARD_TEST_MODE!=1" guard install-core.sh does.
+export HGUARD_ETC_ROOT HGUARD_RUN_ROOT HGUARD_PROC_ROOT HGUARD_SYS_MODULE_ROOT
+export HGUARD_BIN_DIR HGUARD_LIB_DIR HGUARD_CLI_PATH APT_CONF_DIR HGUARD_APT_HOOK_FILE HGUARD_APT_HOOK_SCRIPT
+export HGUARD_LOG_FILE="${temporary_root}/hguard.log"
+export -f sshd
+export -f fail2ban-client
+export -f systemctl
+export -f sysctl
+ss() { printf 'tcp LISTEN 0 128 0.0.0.0:22222 0.0.0.0:* users:(("sshd",pid=1,fd=3))\n'; }
+export -f ss
+ufw() { [ "$1" = "status" ] && printf 'Status: active\n\n22222/tcp ALLOW Anywhere\n'; }
+export -f ufw
+# shellcheck disable=SC2329
+apt-cache() { [ "$1" = "policy" ] || return 1; printf '%s:\n  Installed: 1.0\n  Candidate: 1.0\n' "$2"; }
+export -f apt-cache
+# shellcheck disable=SC2329
+id() { [ "$1" = "-u" ] && printf '0\n' || return 0; }
+export -f id
+
+if status_output="$(HGUARD_TEST_MODE=0 bash "$HGUARD_CLI_PATH" status 2>&1)"; then status_exit=0; else status_exit=$?; fi
+assert_equal 0 "$status_exit" "the installed hguard status exits 0 against this real migrated layout"
+case "$status_output" in
+  *VPSGuard*) fail "hguard status still mentions VPSGuard after a clean migration (output: ${status_output})" ;;
+esac
+for section in "Hguard" "Managed components" "Managed administrator" "SSH" "UFW" "fail2ban" "BBR" "Conntrack"; do
+  case "$status_output" in
+    *"==> ${section}"*) ;;
+    *) fail "hguard status output is missing the '${section}' section (output: ${status_output})" ;;
+  esac
+done
+
+pass "the installed hguard status runs cleanly against the real migrated Vultr layout, with no leftover VPSGuard mentions"
+
 ### A second full main() run must also succeed, without re-migrating and
 ### without the already-finalized port drifting back to 22.
 main
