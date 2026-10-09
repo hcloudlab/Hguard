@@ -201,23 +201,16 @@ assert_file_contains "${HGUARD_ETC_ROOT}/sysctl.d/99-hguard-bbr.conf" "tcp_conge
 assert_file_contains "${HGUARD_ETC_ROOT}/modules-load.d/hguard-bbr.conf" "tcp_bbr"
 
 ### Conntrack: the real AWS machine never had VPSGuard conntrack files,
-### because the cloud image's own conntrack sysctl file made VPSGuard
-### detect a foreign config and skip - migrate_from_vpsguard itself
-### correctly never invents one (verified directly above: migration
-### copies only what legacy VPSGuard files exist, and none did here).
-### That cloud-image file itself was not part of what got exported into
-### this fixture (only files/paths migrate_from_vpsguard reads were
-### imported), so a full normal install run - which independently decides
-### whether to write its own conntrack profile by scanning for *any*
-### foreign conntrack config currently on disk, not by asking what
-### migration did - correctly finds nothing foreign here and writes a
-### fresh Hguard conntrack profile. That divergence from the real
-### machine's behavior is a gap in this fixture's scope, not in the code
-### under test; the assertions below match what a full run correctly does
-### given the data actually captured.
-assert_file_contains "${HGUARD_ETC_ROOT}/sysctl.d/99-hguard-conntrack.conf" "Managed by Hguard"
-assert_file_contains "${HGUARD_ETC_ROOT}/hguard/apply-conntrack-profile.sh" "Managed by Hguard"
-assert_file_contains "${HGUARD_ETC_ROOT}/systemd/system/hguard-conntrack.service" "Managed by Hguard"
+### because the cloud image's own sysctl.d/50-cloudimg-settings.conf
+### (present in this fixture, real content from the machine) sets
+### net.netfilter.nf_conntrack_max itself - foreign_conntrack_config_
+### sources() detects that and a full normal install run correctly skips
+### writing any Hguard conntrack profile, matching the real machine
+### exactly (hguard status there reports "Runtime profile: not
+### configured").
+[ ! -e "${HGUARD_ETC_ROOT}/sysctl.d/99-hguard-conntrack.conf" ] || fail "install must not create conntrack files when the cloud image's own foreign conntrack sysctl is present"
+[ ! -e "${HGUARD_ETC_ROOT}/hguard/apply-conntrack-profile.sh" ] || fail "install must not create a conntrack helper when a foreign conntrack source is present"
+[ ! -e "${HGUARD_ETC_ROOT}/systemd/system/hguard-conntrack.service" ] || fail "install must not create a conntrack service when a foreign conntrack source is present"
 
 ### No file anywhere is still a *currently effective* VPSGuard-managed
 ### file - everything that existed has either been removed (replaced) or
