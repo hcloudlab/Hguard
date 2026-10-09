@@ -41,7 +41,7 @@ simulation_plan_lines() {
 
 main() {
   local upgradable package installed candidate packages simulation
-  local verify_output verify_status
+  local verify_status
 
   parse_update_args "$@"
   [ "$(id -u)" -eq 0 ] || error "Please run hguard update as root."
@@ -92,10 +92,12 @@ main() {
   if ! SSH_PORT="$(read_env_value "$HGUARD_CONFIG_FILE" SSH_PORT 2>/dev/null)" || [ -z "$SSH_PORT" ]; then
     error "No managed SSH port is configured; cannot verify after update."
   fi
-  verify_output="$(run_acceptance_checks)"
+  if ! SUDO_MODE="$(read_env_value "$HGUARD_CONFIG_FILE" SUDO_MODE 2>/dev/null)" || ! validate_sudo_mode "$SUDO_MODE"; then
+    error "No valid sudo mode is configured; cannot verify after update."
+  fi
+  run_acceptance_checks
   verify_status=0
-  read -r failures _ <<< "$(printf '%s\n' "$verify_output" | tail -n1)"
-  [ "$failures" -eq 0 ] || verify_status=1
+  [ "$ACCEPTANCE_FAILURES" -eq 0 ] || verify_status=1
 
   printf '\nUpgraded components:\n'
   printf '%s\n' "$upgradable" | awk '{printf "  %s: %s -> %s\n", $1, $2, $3}'

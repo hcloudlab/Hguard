@@ -11,7 +11,7 @@ export HGUARD_ETC_ROOT="$temporary_root/etc"
 export HGUARD_STATE_DIR="$temporary_root/etc/hguard"
 export HGUARD_CONFIG_FILE="$HGUARD_STATE_DIR/config.env"
 mkdir -p "$HGUARD_STATE_DIR"
-printf "NEW_USER='admin'\nSSH_PORT='22'\n" > "$HGUARD_CONFIG_FILE"
+printf "NEW_USER='admin'\nSUDO_MODE='password'\nSSH_PORT='22'\n" > "$HGUARD_CONFIG_FILE"
 # shellcheck source=update.sh
 . "$TEST_ROOT/update.sh"
 

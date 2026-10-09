@@ -36,8 +36,12 @@ systemctl() { return 0; }
 fail2ban-client() { return 0; }
 sysctl() { [ "$2" = "net.ipv4.tcp_congestion_control" ] && printf 'bbr\n' || printf 'fq\n'; }
 
-result="$(run_acceptance_checks)"
-assert_equal "0 0" "$result" "all-pass checks report zero failures and zero warnings"
+# Counts come back via ACCEPTANCE_FAILURES/ACCEPTANCE_WARNINGS globals,
+# not a stdout line - called as a bare statement, not `$(...)`, so any
+# warn() output (none expected here) would reach the terminal directly
+# instead of being captured and discarded.
+run_acceptance_checks
+assert_equal "0 0" "${ACCEPTANCE_FAILURES} ${ACCEPTANCE_WARNINGS}" "all-pass checks report zero failures and zero warnings"
 [ ! -e "$HGUARD_CONFIG_FILE" ] || fail "run_acceptance_checks must not write config.env"
 [ ! -e "$HGUARD_INSTALLED_MARKER" ] || fail "run_acceptance_checks must not write the installed marker"
 
@@ -52,8 +56,8 @@ assert_file_contains "$HGUARD_INSTALLED_MARKER" "success"
 # run_final_acceptance fail, without it or run_acceptance_checks itself
 # needing to know anything about what the count means.
 ufw_is_active() { return 1; }
-result="$(run_acceptance_checks | tail -n1)"
-assert_equal "1 0" "$result" "a single failing check reports one failure"
+run_acceptance_checks
+assert_equal "1 0" "${ACCEPTANCE_FAILURES} ${ACCEPTANCE_WARNINGS}" "a single failing check reports one failure"
 assert_failure run_final_acceptance
 
 pass "run_acceptance_checks is read-only; run_final_acceptance keeps the install-time persistence"

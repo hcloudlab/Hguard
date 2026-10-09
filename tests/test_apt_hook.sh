@@ -35,7 +35,7 @@ pass "install_apt_hook writes a managed DPkg::Post-Invoke hook pointing at apt-h
 . "$TEST_ROOT/apt-hook.sh"
 
 id() { [ "$1" = "-u" ] && printf '0\n' || return 0; }
-printf "NEW_USER='admin'\nSSH_PORT='22'\n" > "$HGUARD_CONFIG_FILE"
+printf "NEW_USER='admin'\nSUDO_MODE='password'\nSSH_PORT='22'\n" > "$HGUARD_CONFIG_FILE"
 apt-cache() {
   [ "$1" = "policy" ] || return 1
   printf '%s:\n  Installed: 1.0\n  Candidate: 1.0\n' "$2"

@@ -19,7 +19,7 @@ HGUARD_LIB_MODE=1
 . "${SCRIPT_DIR}/install-core.sh"
 
 main() {
-  local current_versions previous_versions verify_output verify_status failures
+  local current_versions previous_versions verify_status
 
   [ "$(id -u)" -eq 0 ] || return 0
   [ -f "$HGUARD_CONFIG_FILE" ] || return 0
@@ -40,12 +40,14 @@ main() {
   if ! SSH_PORT="$(read_env_value "$HGUARD_CONFIG_FILE" SSH_PORT 2>/dev/null)" || [ -z "$SSH_PORT" ]; then
     return 0
   fi
+  if ! SUDO_MODE="$(read_env_value "$HGUARD_CONFIG_FILE" SUDO_MODE 2>/dev/null)" || ! validate_sudo_mode "$SUDO_MODE"; then
+    return 0
+  fi
 
   warn() { :; }
-  verify_output="$(run_acceptance_checks | tail -n1)"
-  read -r failures _ <<< "$verify_output"
+  run_acceptance_checks
   verify_status="FAIL"
-  [ "$failures" -eq 0 ] && verify_status="PASS"
+  [ "$ACCEPTANCE_FAILURES" -eq 0 ] && verify_status="PASS"
 
   atomic_write "$HGUARD_APT_HOOK_STATE_FILE" 600 "TIMESTAMP='$(date -u '+%Y-%m-%dT%H:%M:%SZ')'
 RESULT='${verify_status}'

@@ -20,8 +20,6 @@ parse_verify_args() {
 }
 
 main() {
-  local result failures warnings
-
   parse_verify_args "$@"
   [ "$(id -u)" -eq 0 ] || error "Please run hguard verify as root."
 
@@ -31,6 +29,9 @@ main() {
   if ! SSH_PORT="$(read_env_value "$HGUARD_CONFIG_FILE" SSH_PORT 2>/dev/null)" || [ -z "$SSH_PORT" ]; then
     error "No managed SSH port is configured; run the installer first."
   fi
+  if ! SUDO_MODE="$(read_env_value "$HGUARD_CONFIG_FILE" SUDO_MODE 2>/dev/null)" || ! validate_sudo_mode "$SUDO_MODE"; then
+    error "No valid sudo mode is configured; run the installer first."
+  fi
   if [ "$QUIET" = "true" ]; then
     # run_acceptance_checks' own warn() calls would otherwise print one
     # line per failing check; --quiet (the apt hook's mode, run after
@@ -38,17 +39,21 @@ main() {
     warn() { :; }
   fi
 
-  result="$(run_acceptance_checks | tail -n1)"
-  read -r failures warnings <<< "$result"
+  # A bare statement, not `$(...)`: run_acceptance_checks' warn() output
+  # must reach the terminal directly in non-quiet mode, not get piped
+  # through and discarded - that was the whole bug. The failure/warning
+  # counts come back via its ACCEPTANCE_FAILURES/ACCEPTANCE_WARNINGS
+  # globals instead of a stdout line.
+  run_acceptance_checks
 
-  if [ "$failures" -eq 0 ] && [ "$warnings" -eq 0 ]; then
+  if [ "$ACCEPTANCE_FAILURES" -eq 0 ] && [ "$ACCEPTANCE_WARNINGS" -eq 0 ]; then
     printf 'PASS: all acceptance checks passed.\n'
     return 0
-  elif [ "$failures" -eq 0 ]; then
-    printf 'PASS (with warnings): acceptance checks passed with %s warning(s).\n' "$warnings"
+  elif [ "$ACCEPTANCE_FAILURES" -eq 0 ]; then
+    printf 'PASS (with warnings): acceptance checks passed with %s warning(s).\n' "$ACCEPTANCE_WARNINGS"
     return 0
   else
-    printf 'FAIL: %s acceptance check(s) failed.\n' "$failures"
+    printf 'FAIL: %s acceptance check(s) failed.\n' "$ACCEPTANCE_FAILURES"
     return 1
   fi
 }

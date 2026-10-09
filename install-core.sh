@@ -104,6 +104,8 @@ SSH_PORT=""
 ORIGINAL_SSH_PORT=""
 PORT_MIGRATION_REQUIRED="false"
 ATOMIC_WRITE_CHANGED="false"
+ACCEPTANCE_FAILURES=0
+ACCEPTANCE_WARNINGS=0
 INSTALL_STATUS="failed"
 BBR_STATUS="unsupported"
 SSH_RUNTIME_MODE="unknown"
@@ -2393,8 +2395,16 @@ verify_config_permissions() {
 # verify` (bin/hguard-verify.sh) for a read-only recheck that must never
 # write config/state - only this function's checks need to stay in sync
 # between the two callers, not any side effect.
-# Prints "<failures> <warnings>" on success (always "succeeds" itself;
-# the caller decides what a nonzero failure count means).
+# Sets ACCEPTANCE_FAILURES/ACCEPTANCE_WARNINGS (globals, not local) on
+# return; always "succeeds" itself regardless of their value (the caller
+# decides what a nonzero failure count means). Deliberately NOT printed
+# as a final stdout line the caller greps/tails out of the rest of this
+# function's warn() output: every caller used to pipe this through `|
+# tail -n1` to get the count, which silently discarded every warn() line
+# explaining *why* - including in non-quiet `hguard verify`, where seeing
+# those reasons is the entire point. Call this as a bare statement (not
+# inside `$(...)`) so its warn() output reaches the terminal normally,
+# then read the globals.
 run_acceptance_checks() {
   local failures=0 warnings=0 current_cc current_qdisc
 
@@ -2419,20 +2429,17 @@ run_acceptance_checks() {
     warnings=$((warnings + 1))
   fi
 
-  printf '%s %s\n' "$failures" "$warnings"
+  ACCEPTANCE_FAILURES="$failures"
+  ACCEPTANCE_WARNINGS="$warnings"
 }
 
 run_final_acceptance() {
-  local failures warnings
+  run_acceptance_checks
 
-  # run_acceptance_checks' warn() calls print to stdout too, ahead of its
-  # final "<failures> <warnings>" line - take only the last line.
-  read -r failures warnings <<< "$(run_acceptance_checks | tail -n1)"
-
-  [ "$failures" -eq 0 ] || return 1
+  [ "$ACCEPTANCE_FAILURES" -eq 0 ] || return 1
   if [ "$INSTALL_STATUS" = "pending-port-finalization" ]; then
     :
-  elif [ "$warnings" -gt 0 ] || [ "$INSTALL_STATUS" = "success-with-warnings" ]; then
+  elif [ "$ACCEPTANCE_WARNINGS" -gt 0 ] || [ "$INSTALL_STATUS" = "success-with-warnings" ]; then
     INSTALL_STATUS="success-with-warnings"
   else
     INSTALL_STATUS="success"
