@@ -59,6 +59,19 @@ HGUARD_APT_HOOK_SCRIPT="${HGUARD_APT_HOOK_SCRIPT:-${HGUARD_LIB_DIR}/apt-hook.sh}
 # hardcoded for the same reason.
 HGUARD_RAW_BASE_URL="https://raw.githubusercontent.com/hcloudlab/Hguard"
 
+# Defense in depth, independent of tests/test_helper.sh's own sandboxed
+# defaults: if this is ever sourced under HGUARD_TEST_MODE=1 with one of
+# these three still pointing at its real-system default, fail loudly
+# immediately rather than let install_hguard_cli/install_apt_hook silently
+# write to the machine running the test suite.
+if [ "$HGUARD_TEST_MODE" = "1" ]; then
+  if [ "$HGUARD_BIN_DIR" = "/usr/local/sbin" ] || [ "$HGUARD_LIB_DIR" = "/usr/local/lib/hguard" ] \
+    || [ "$APT_CONF_DIR" = "/etc/apt/apt.conf.d" ]; then
+    printf '[ERROR] HGUARD_TEST_MODE=1 but HGUARD_BIN_DIR/HGUARD_LIB_DIR/APT_CONF_DIR still point at the real system; override them before sourcing this file.\n' >&2
+    exit 1
+  fi
+fi
+
 # VPSGuard-era (pre-rename) paths, only ever read/removed by
 # migrate_from_vpsguard() and never written to - current code always
 # writes the HGUARD_* equivalents above.
