@@ -34,7 +34,7 @@ pass "survey_foreign_listening_ports excludes SSH and loopback listeners"
 # here is systemd-network's DHCP client on the public-ish interface address.
 export SS_LISTEN_ALL_OUTPUT_OVERRIDE='udp UNCONN 0      0                127.0.0.54:53    0.0.0.0:*  users:(("systemd-resolve",pid=9094,fd=16))
 udp UNCONN 0      0             127.0.0.53%lo:53    0.0.0.0:*  users:(("systemd-resolve",pid=9094,fd=14))
-udp UNCONN 0      0        172.31.23.127%ens5:68    0.0.0.0:*  users:(("systemd-network",pid=4210,fd=22))
+udp UNCONN 0      0        203.0.113.23%ens5:68    0.0.0.0:*  users:(("systemd-network",pid=4210,fd=22))
 udp UNCONN 0      0                 127.0.0.1:323   0.0.0.0:*  users:(("chronyd",pid=718,fd=5))
 udp UNCONN 0      0                     [::1]:323      [::]:*  users:(("chronyd",pid=718,fd=6))
 tcp LISTEN 0      4096          127.0.0.53%lo:53    0.0.0.0:*  users:(("systemd-resolve",pid=9094,fd=15))
