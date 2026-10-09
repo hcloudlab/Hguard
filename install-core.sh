@@ -967,10 +967,21 @@ ${SUDOERS_DIR}/vpsguard-${new_user}
 ${SUDOERS_DIR}/90-vpsguard-${new_user}"
   fi
 
+  # Explicit `return 0` at the end, not left to the loop's own exit
+  # status: on a normal (non-error) run none of the candidates exist -
+  # legacy files are supposed to be gone after a clean migration - so the
+  # last `legacy_marker_owns "$path" && printf ...` evaluated is false,
+  # and unlike an `if`/`elif` chain (which is 0 when nothing matches), a
+  # bare `&&` list's exit status is exactly that failing left-hand test.
+  # Called as `found="$(legacy_vpsguard_files_present)"` under `set -e`,
+  # that silently killed the calling script (status.sh) - on every
+  # machine where migration had already completed, i.e. almost all of
+  # them, not just ones with a real conflict.
   while IFS= read -r path; do
     [ -n "$path" ] || continue
     legacy_marker_owns "$path" && printf '%s\n' "$path"
   done <<< "$candidates"
+  return 0
 }
 
 user_in_sudo_group() {
