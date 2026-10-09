@@ -2,47 +2,72 @@
 
 All notable changes to VPSGuard are documented here.
 
-## [0.4.0] - unreleased
+## [0.4.0] - 2026-10-09
 
-Renamed VPSGuard to Hguard. Migration tests involving the real VPSGuard
-0.3.7 on-disk layout are still pending real-machine fixtures; this entry
-will be amended before release.
+### Breaking Changes
+
+- The project is renamed from VPSGuard to **Hguard**. The repository has
+  moved to `hcloudlab/Hguard`; the old address (`hcloudlab/vpsguard`)
+  redirects automatically, so links and scripts that still point at it
+  keep working.
+- Every `VPSGUARD_*` environment variable is renamed to `HGUARD_*`
+  (`NEW_USER`, `SSH_PORT` and `ALLOW_PORTS` are unchanged); every managed
+  file's ownership marker and filename moves from vpsguard/VPSGuard to
+  hguard/Hguard.
 
 ### Added
 
-- A persistent `hguard` command (`/usr/local/sbin/hguard`, installed
-  automatically): `hguard status`, `hguard verify` (read-only acceptance
-  recheck), `hguard update` (upgrades only `openssh-server`, `ufw`,
-  `fail2ban`, `python3-systemd`, `sudo` - nothing else, no kernel, no
-  self-update), `hguard uninstall`, `hguard version`.
-- `hguard update` simulates the full apt plan first (`apt-get -s install
-  --only-upgrade`) and shows every package it would touch, not just the
-  five managed ones; refuses outright if the simulation would remove any
-  package.
-- An apt `DPkg::Post-Invoke` hook that runs `hguard verify --quiet` after
-  any apt run that changed a managed component's version, recording the
-  result for `hguard status` to show. Never fails the apt run itself.
-- Automatic one-time migration from an existing VPSGuard 0.3.7 install:
-  sshd, fail2ban, sudoers, BBR and conntrack configuration are each
-  migrated with "write new, validate, remove old, validate again" -
-  never a window where both or neither are in effect. `/etc/vpsguard` is
-  preserved as a backup, never deleted; `hguard status` warns (without
-  removing anything) if a VPSGuard-managed file reappears afterward.
+- Automatic one-time migration from an existing VPSGuard 0.3.x install:
+  SSH, fail2ban, sudoers, BBR and conntrack configuration, and the
+  conntrack systemd service, are each migrated to Hguard management with
+  "write new, validate, remove old, validate again" - never a window
+  where both or neither configuration is in effect. `/etc/vpsguard` is
+  kept afterward as a backup; it is only removed once a later `hguard
+  uninstall` finishes completely and safely (SSH and sudo both fully
+  removed, nothing left over) - a partial uninstall leaves it in place.
+- A persistent `hguard` command, installed automatically: `hguard
+  status`, `hguard verify` (read-only acceptance recheck), `hguard
+  update`, `hguard uninstall`, `hguard version`.
+- `hguard update` only ever touches the five components Hguard manages
+  (`openssh-server`, `ufw`, `fail2ban`, `python3-systemd`, `sudo`) -
+  never the kernel, never Hguard itself. It shows the full apt upgrade
+  plan before running (not just those five packages), and refuses
+  outright if that plan would remove any package.
+- An apt hook that automatically reverifies Hguard's configuration
+  whenever one of the five managed components' version changes (for
+  example after a routine `apt upgrade`), without ever causing apt
+  itself to fail; the result (pass/fail, with a timestamp) shows up in
+  `hguard status`.
 
-### Changed
+### Fixed
 
-- All `VPSGUARD_*` environment variables renamed to `HGUARD_*` (`NEW_USER`,
-  `SSH_PORT`, `ALLOW_PORTS` unchanged); all managed filenames, the
-  ownership marker, and `CORE_URL`/GitHub links renamed from vpsguard/
-  VPSGuard to hguard/Hguard.
-- `status.sh` and `uninstall.sh` no longer duplicate install-core.sh's
-  constants and helper functions; both now source it directly (in a new
-  library mode that skips running its own installer `main()`). This
-  incidentally fixed two latent bugs in their own duplicated copies: the
-  ownership-marker check only looked at line 1 (missing markers on line 2,
-  e.g. the conntrack helper's shebang-first format), and the UFW rule
-  check only read `ufw status`, missing a rule UFW had accepted via
-  `ufw show added` but not yet reflected there.
+- A freshly installed or rerun `hguard` command could fail to reinstall
+  itself on every subsequent run.
+- `hguard status` could exit partway through on most machines, silently
+  dropping every section after the first one or two.
+- `hguard verify` could report a sudo check as failing when it was not
+  (the configured sudo mode was never actually read), and gave no way to
+  see which specific check had failed.
+- After migrating from VPSGuard, some migrated files - BBR and conntrack
+  configuration in particular - could keep showing as managed by the old
+  VPSGuard version indefinitely, which could make Hguard treat its own
+  conntrack configuration as a foreign, unmanaged file and stop
+  optimizing it.
+- `hguard uninstall` could leave `/etc/hguard` non-empty (the apt hook's
+  own state files were not cleaned up) even after an otherwise complete
+  uninstall.
+- `hguard status` showed a misleading "missing" for the SSH socket
+  override on machines running in `ssh.service` mode, where that file
+  never applies.
+
+### Verified on real hardware
+
+- AWS (Ubuntu 24.04, `ssh.socket` mode, cloud-init image): upgrade from
+  VPSGuard 0.3.7, rerun, reboot, the apt hook, and `hguard uninstall` all
+  verified.
+- Vultr (Ubuntu 24.04, `ssh.service` mode, SSH port already migrated, an
+  existing proxy service already running): upgrade from VPSGuard 0.3.7,
+  rerun, reboot, the apt hook, and `hguard uninstall` all verified.
 
 ## [0.3.7] - 2026-10-08
 
