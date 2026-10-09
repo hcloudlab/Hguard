@@ -1,0 +1,10 @@
+# Managed by VPSGuard 0.3.7
+[sshd]
+enabled = true
+port = 22222
+filter = sshd
+backend = systemd
+maxretry = 5
+findtime = 10m
+bantime = 1h
+ignoreip = 127.0.0.1/8 ::1 203.0.113.47

@@ -1,0 +1,17 @@
+# Managed by VPSGuard 0.3.7; optional conntrack runtime floor.
+[Unit]
+Description=Apply VPSGuard conntrack runtime profile
+Documentation=https://github.com/hcloudlab/vpsguard
+DefaultDependencies=no
+Wants=systemd-modules-load.service
+After=systemd-modules-load.service systemd-sysctl.service
+Before=network-pre.target ufw.service
+ConditionPathExists=/proc/sys/net/netfilter/nf_conntrack_max
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash /etc/vpsguard/apply-conntrack-profile.sh
+
+[Install]
+WantedBy=sysinit.target

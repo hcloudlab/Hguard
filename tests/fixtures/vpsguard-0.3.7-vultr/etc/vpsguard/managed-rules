@@ -1,0 +1,6 @@
+# UFW rules added by VPSGuard
+443/tcp
+8443/udp
+8443/tcp
+34567/tcp
+22222/tcp
