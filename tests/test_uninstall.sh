@@ -277,3 +277,102 @@ remove_hguard_cli_and_hook
 [ -e "$HGUARD_CLI_PATH" ] || fail "an unrecognized file at the hguard CLI path must be preserved, not removed"
 
 pass "remove_hguard_cli_and_hook removes the managed CLI/hook, and preserves an unrecognized dispatcher file"
+
+# Regression: the apt hook's own state files (last verification result/
+# timestamp and the package-version snapshot it diffs against) were
+# left behind after uninstall, which is why /etc/hguard was reported
+# "not empty" and preserved instead of removed - run the hook once for
+# real to produce them, then uninstall and confirm the whole state
+# directory is gone.
+mkdir -p "$HGUARD_LIB_DIR" "$APT_CONF_DIR" "$(dirname "$HGUARD_CLI_PATH")" "$SUDOERS_DIR"
+printf '#!/usr/bin/env bash\n# Managed by Hguard 0.4.0\n' > "$HGUARD_CLI_PATH"
+printf '# Managed by Hguard 0.4.0\nDPkg::Post-Invoke {};\n' > "$HGUARD_APT_HOOK_FILE"
+printf "NEW_USER='trackedadmin'\nSUDO_MODE='password'\nSSH_PORT='22'\nORIGINAL_SSH_PORT='22'\n" > "$HGUARD_CONFIG_FILE"
+# The subshell is required here, not just convenient: apt-hook.sh defines
+# its own main() and re-sources install-core.sh, which would overwrite
+# this file's own main() (uninstall.sh's) and HGUARD_* path variables for
+# everything after it if sourced at the top level instead. That re-
+# sourcing is also why re-sourcing install-core.sh's HGUARD_*=${HGUARD_*:-
+# default} assignments inside this subshell makes shellcheck flag every
+# later read of those same variables, for the rest of the file, as
+# possibly stale (SC2031) - disabled file-wide below with the reason.
+(
+  # shellcheck source=apt-hook.sh
+  . "$TEST_ROOT/apt-hook.sh"
+  id() { [ "${1:-}" = "-u" ] && printf '0\n' || return 0; }
+  apt-cache() { [ "$1" = "policy" ] || return 1; printf '%s:\n  Installed: 1.0\n  Candidate: 1.0\n' "$2"; }
+  validate_existing_user_account() { :; }
+  verify_authorized_keys() { return 0; }
+  verify_sudo_configuration() { return 0; }
+  verify_effective_sshd_config() { return 0; }
+  verify_ssh_runtime_healthy() { return 0; }
+  verify_ssh_listener() { return 0; }
+  ufw_is_active() { return 0; }
+  ufw_tcp_rule_exists() { return 0; }
+  verify_config_permissions() { return 0; }
+  systemctl() { return 0; }
+  fail2ban-client() { return 0; }
+  sysctl() { [ "$2" = "net.ipv4.tcp_congestion_control" ] && printf 'bbr\n' || printf 'fq\n'; }
+  main
+)
+# shellcheck disable=SC2031
+{
+  [ -f "$HGUARD_APT_HOOK_STATE_FILE" ] || fail "setup failed: the apt hook did not produce a state file"
+  [ -f "$HGUARD_APT_HOOK_VERSIONS_FILE" ] || fail "setup failed: the apt hook did not produce a versions snapshot"
+
+  remove_hguard_cli_and_hook
+  [ ! -e "$HGUARD_APT_HOOK_STATE_FILE" ] || fail "the apt hook's verification state file was not removed"
+  [ ! -e "$HGUARD_APT_HOOK_VERSIONS_FILE" ] || fail "the apt hook's version snapshot was not removed"
+
+  rm -f "$HGUARD_PENDING_PORT_MARKER" "$HGUARD_MANAGED_RULES" "$HGUARD_CONFIG_FILE" "$HGUARD_STATE_FILE" \
+    "${HGUARD_STATE_DIR}/.ssh_done" "${HGUARD_STATE_DIR}/.sudo_done" "${HGUARD_STATE_DIR}/.ufw_done"
+  rmdir "$HGUARD_STATE_DIR" 2>/dev/null || fail "the state directory was not empty after removing the apt hook's state files (contents: $(ls -la "$HGUARD_STATE_DIR" 2>&1))"
+}
+
+pass "remove_hguard_cli_and_hook also removes the apt hook's own state/version files, leaving the state directory empty"
+
+# Item 2: the pre-migration VPSGuard backup directory. Only removed when
+# it is positively identified by MIGRATED-TO-HGUARD, and only on a fully
+# successful (no leftovers) uninstall.
+# shellcheck disable=SC2031
+{
+  id() { [ "${1:-}" = "-u" ] && printf '0\n' || printf 'trackedadmin sudo\n'; }
+  rm -rf "${temporary_root:?}/vpsguard-backup-test"
+  mkdir -p "${temporary_root}/vpsguard-backup-test"
+  export VPSGUARD_LEGACY_STATE_DIR="${temporary_root}/vpsguard-backup-test"
+  export VPSGUARD_MIGRATED_MARKER_FILE="${VPSGUARD_LEGACY_STATE_DIR}/MIGRATED-TO-HGUARD"
+  mkdir -p "$HGUARD_STATE_DIR"
+  printf "NEW_USER='trackedadmin'\nSSH_PORT='22'\nORIGINAL_SSH_PORT='22'\nSUDO_MODE='password'\n" > "$HGUARD_CONFIG_FILE"
+
+  # Case A: a genuine VPSGuard backup (marker present) + a fully successful
+  # uninstall -> the whole backup directory is removed.
+  printf '.installed\n' > "${VPSGUARD_LEGACY_STATE_DIR}/.installed"
+  printf 'Migrated to Hguard 0.4.0 at 2026-01-01T00:00:00Z.\n' > "$VPSGUARD_MIGRATED_MARKER_FILE"
+  remove_safe_ufw_rules() { :; }
+  remove_fail2ban_jail_safely() { :; }
+  remove_ssh_snippet_safely() { :; }
+  main <<< "UNINSTALL"
+  [ ! -d "$VPSGUARD_LEGACY_STATE_DIR" ] || fail "the VPSGuard backup was not removed after a fully successful uninstall"
+
+  # Case B: a genuine VPSGuard backup, but the uninstall only partially
+  # succeeds (SSH removal fails) -> the backup must be left alone.
+  mkdir -p "$HGUARD_STATE_DIR" "$VPSGUARD_LEGACY_STATE_DIR"
+  printf "NEW_USER='trackedadmin'\nSSH_PORT='22'\nORIGINAL_SSH_PORT='22'\nSUDO_MODE='password'\n" > "$HGUARD_CONFIG_FILE"
+  printf 'Migrated to Hguard 0.4.0 at 2026-01-01T00:00:00Z.\n' > "$VPSGUARD_MIGRATED_MARKER_FILE"
+  remove_ssh_snippet_safely() { return 1; }
+  main <<< "UNINSTALL"
+  [ -d "$VPSGUARD_LEGACY_STATE_DIR" ] || fail "the VPSGuard backup was removed despite a partial (leftovers=true) uninstall"
+  rm -f "$HGUARD_CONFIG_FILE"
+
+  # Case C: a directory at the legacy vpsguard path with no MIGRATED
+  # marker - not positively identified as Hguard's backup, so it must be
+  # left alone even on a fully successful uninstall.
+  rm -f "$VPSGUARD_MIGRATED_MARKER_FILE"
+  mkdir -p "$HGUARD_STATE_DIR"
+  printf "NEW_USER='trackedadmin'\nSSH_PORT='22'\nORIGINAL_SSH_PORT='22'\nSUDO_MODE='password'\n" > "$HGUARD_CONFIG_FILE"
+  remove_ssh_snippet_safely() { :; }
+  main <<< "UNINSTALL"
+  [ -d "$VPSGUARD_LEGACY_STATE_DIR" ] || fail "an unmarked directory at the legacy vpsguard path was removed without positive identification"
+}
+
+pass "uninstall removes the pre-migration VPSGuard backup only when positively marked and the uninstall fully succeeds"

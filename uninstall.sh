@@ -69,7 +69,17 @@ remove_owned_file() {
 # dispatcher confirms this is really an Hguard-managed installation, same
 # "don't touch what we can't positively identify" rule as everything else.
 remove_hguard_cli_and_hook() {
-  remove_owned_file "$HGUARD_APT_HOOK_FILE"
+  if managed_file_is_owned "$HGUARD_APT_HOOK_FILE"; then
+    rm -f "$HGUARD_APT_HOOK_FILE"
+    info "Removed Hguard-managed file: ${HGUARD_APT_HOOK_FILE}"
+    # The hook's own state - last verification result/timestamp and the
+    # package-version snapshot it diffs against - has no purpose once
+    # the hook itself is gone, and leaving it behind is why the state
+    # directory wasn't empty and got preserved instead of removed below.
+    rm -f "$HGUARD_APT_HOOK_STATE_FILE" "$HGUARD_APT_HOOK_VERSIONS_FILE"
+  elif [ -e "$HGUARD_APT_HOOK_FILE" ]; then
+    warn "Preserved unrecognized file: ${HGUARD_APT_HOOK_FILE}"
+  fi
   if managed_file_is_owned "$HGUARD_CLI_PATH"; then
     rm -f "$HGUARD_CLI_PATH"
     info "Removed Hguard-managed file: ${HGUARD_CLI_PATH}"
@@ -361,6 +371,16 @@ main() {
       "${HGUARD_STATE_DIR}/.ssh_done" "${HGUARD_STATE_DIR}/.sudo_done" "${HGUARD_STATE_DIR}/.ufw_done"
     if ! rmdir "$HGUARD_STATE_DIR" 2>/dev/null; then
       warn "State directory was not empty and was preserved: ${HGUARD_STATE_DIR}"
+    fi
+    # Only once everything above is confirmed fully, safely removed: the
+    # pre-migration VPSGuard backup has no remaining purpose, and the
+    # MIGRATED-TO-HGUARD marker is what positively identifies this
+    # directory as that backup (rather than something unrelated that
+    # happens to live at the same legacy path) - same "don't touch what
+    # we can't positively identify" rule as everything else here.
+    if [ -f "$VPSGUARD_MIGRATED_MARKER_FILE" ]; then
+      rm -rf "$VPSGUARD_LEGACY_STATE_DIR"
+      info "Removed the pre-migration VPSGuard backup: ${VPSGUARD_LEGACY_STATE_DIR}"
     fi
     info "Safe uninstall completed."
   else
