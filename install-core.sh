@@ -206,9 +206,17 @@ atomic_write() {
   ATOMIC_WRITE_CHANGED="true"
 }
 
+# Recognizes a VPSGuard-era marker as well as the current one, not just
+# managed_file_is_owned's current-marker-only check: a half-migrated
+# machine (migrate_from_vpsguard ran before the marker-relabeling fix
+# below existed, or a future migration step forgets to relabel one) has
+# Hguard-named files still carrying "Managed by VPSGuard". Those are
+# exactly as safe to overwrite as a current-marker file - migration means
+# Hguard now owns them - so every writer gated by this must keep
+# converging on them instead of hard-refusing forever.
 assert_managed_or_absent() {
   local path="$1"
-  if [ -e "$path" ] && ! head -n 2 "$path" | grep -Fq "$MANAGED_MARKER"; then
+  if [ -e "$path" ] && ! any_generation_marker_owns "$path"; then
     error "Refusing to overwrite an unrecognized existing file: ${path}"
   fi
 }
@@ -1074,7 +1082,7 @@ configure_passwordless_sudo() {
   local content
 
   sudoers_file="$(sudoers_file_for_user)"
-  if [ -e "$sudoers_file" ] && ! managed_file_is_owned "$sudoers_file"; then
+  if [ -e "$sudoers_file" ] && ! any_generation_marker_owns "$sudoers_file"; then
     warn "Refusing to overwrite an unrecognized sudoers file: ${sudoers_file}"
     return 1
   fi
@@ -1114,7 +1122,7 @@ detect_foreign_nopasswd_sudoers() {
   [ -d "$SUDOERS_DIR" ] || return 1
   for file in "$SUDOERS_DIR"/*; do
     [ -f "$file" ] || continue
-    managed_file_is_owned "$file" && continue
+    any_generation_marker_owns "$file" && continue
     if grep -Eq "^[[:space:]]*${NEW_USER}[[:space:]]+ALL=\(ALL(:ALL)?\)[[:space:]]+NOPASSWD:" "$file"; then
       printf '%s\n' "$file"
       return 0
@@ -1141,11 +1149,11 @@ configure_password_sudo() {
 
   sudoers_file="$(sudoers_file_for_user)"
   legacy_file="$(legacy_sudoers_file_for_user)"
-  if [ -e "$sudoers_file" ] && ! managed_file_is_owned "$sudoers_file"; then
+  if [ -e "$sudoers_file" ] && ! any_generation_marker_owns "$sudoers_file"; then
     warn "Refusing to remove an unrecognized sudoers file: ${sudoers_file}"
     return 1
   fi
-  if [ -e "$legacy_file" ] && ! managed_file_is_owned "$legacy_file"; then
+  if [ -e "$legacy_file" ] && ! any_generation_marker_owns "$legacy_file"; then
     warn "Refusing to remove an unrecognized legacy sudoers file: ${legacy_file}"
     return 1
   fi
@@ -2609,8 +2617,34 @@ migrate_from_vpsguard_needed() {
   [ -d "$VPSGUARD_LEGACY_STATE_DIR" ] && [ ! -f "$VPSGUARD_MIGRATED_MARKER_FILE" ]
 }
 
+# Rewrites a VPSGuard-era "Managed by VPSGuard <ver>" marker (line 1, or
+# line 2 after a shebang) to the current "Managed by Hguard <ver>" in
+# place, leaving every other line byte-for-byte untouched - including the
+# rest of the marker line itself (e.g. a trailing "; values are validated
+# before use."). Used instead of regenerating migrated files from a
+# template so port numbers, conntrack parameters, ignoreip lists, etc.
+# can never drift from what VPSGuard actually had configured; only the
+# marker text, which carries no semantic meaning to any consumer of these
+# files, is substituted. A no-op (and not an error) if the file has
+# already been relabeled or never had this marker to begin with.
+migrate_relabel_marker() {
+  local file="$1"
+  local mode temporary_file
+
+  [ -f "$file" ] || return 0
+  if ! mode="$(stat -c '%a' "$file" 2>/dev/null)"; then mode="$(stat -f '%Lp' "$file" 2>/dev/null)"; fi
+  [ -n "$mode" ] || mode=644
+  temporary_file="$(mktemp "${file}.relabel.XXXXXX")" || return 1
+  if ! sed -E "1,2s/${LEGACY_MANAGED_MARKER} [0-9]+\.[0-9]+\.[0-9]+/${MANAGED_MARKER} ${HGUARD_VERSION}/" "$file" > "$temporary_file"; then
+    rm -f "$temporary_file"
+    return 1
+  fi
+  chmod "$mode" "$temporary_file"
+  mv -f "$temporary_file" "$file"
+}
+
 migrate_vpsguard_copy_state_files() {
-  local src dest name
+  local src dest name temporary_file
 
   ensure_directory "$HGUARD_STATE_DIR" 700
   for name in config.env state.env managed-rules .installed .pending-port-finalization \
@@ -2621,6 +2655,24 @@ migrate_vpsguard_copy_state_files() {
     cp -p "$src" "$dest" || error "Migration: could not copy ${src} to ${dest}."
     chmod 600 "$dest"
   done
+  # config.env carries the "Managed by VPSGuard" marker (it will be
+  # rewritten with current values moments later by write_config_env/
+  # write_pending_config_env regardless, but relabel now for consistency
+  # and so any_generation_marker_owns-independent readers see it correctly
+  # sooner). state.env is deliberately left untouched - it is the frozen
+  # pre-install snapshot and must stay byte-identical, header included.
+  migrate_relabel_marker "$HGUARD_CONFIG_FILE"
+  # managed-rules' header ("# UFW rules added by VPSGuard") isn't the
+  # "Managed by ..." marker pattern and has no functional meaning anywhere
+  # (nothing parses it), but record_managed_rule/record_preinstall_state
+  # only ever write that header when the file doesn't already exist - so
+  # unlike config.env, nothing downstream will ever correct this on its
+  # own. Cosmetic, but there is no self-healing path, so fix it here.
+  if [ -f "$HGUARD_MANAGED_RULES" ]; then
+    temporary_file="$(mktemp "${HGUARD_MANAGED_RULES}.relabel.XXXXXX")" \
+      && sed '1s/UFW rules added by VPSGuard/UFW rules added by Hguard/' "$HGUARD_MANAGED_RULES" > "$temporary_file" \
+      && { chmod 600 "$temporary_file"; mv -f "$temporary_file" "$HGUARD_MANAGED_RULES"; }
+  fi
 }
 
 # Mirrors ensure_hguard_sshd_include_first's removal half, but for the
@@ -2707,6 +2759,7 @@ migrate_vpsguard_sshd() {
 migrate_vpsguard_fail2ban() {
   [ -f "$VPSGUARD_LEGACY_FAIL2BAN_JAIL" ] || return 0
   cp -p "$VPSGUARD_LEGACY_FAIL2BAN_JAIL" "$FAIL2BAN_JAIL"
+  migrate_relabel_marker "$FAIL2BAN_JAIL"
   if ! fail2ban-client -t >/dev/null 2>&1; then
     rm -f "$FAIL2BAN_JAIL"
     warn "Migration: new fail2ban jail failed validation; the VPSGuard jail is preserved."
@@ -2740,6 +2793,7 @@ migrate_vpsguard_sudoers() {
   if [ -f "$legacy_file" ]; then
     cp -p "$legacy_file" "$new_file"
     chmod 440 "$new_file"
+    migrate_relabel_marker "$new_file"
     if ! visudo -cf "$new_file" >/dev/null 2>&1; then
       rm -f "$new_file"
       warn "Migration: new sudoers file failed validation; the VPSGuard sudoers file is preserved."
@@ -2753,7 +2807,11 @@ migrate_vpsguard_sudoers() {
   # 90-vpsguard-<user> is already two generations obsolete by the time of
   # this migration; just retire it once the current generation (above, if
   # any) has been safely handled - no new file corresponds to it.
-  if [ -f "$legacy_legacy_file" ] && managed_file_is_owned "$legacy_legacy_file"; then
+  # any_generation_marker_owns, not managed_file_is_owned: a real file from
+  # that old generation carries "Managed by VPSGuard", never "Managed by
+  # Hguard" - the current-marker-only check here meant this cleanup could
+  # never actually fire for a genuine old-generation file.
+  if [ -f "$legacy_legacy_file" ] && any_generation_marker_owns "$legacy_legacy_file"; then
     rm -f "$legacy_legacy_file"
   fi
 }
@@ -2768,11 +2826,13 @@ ${VPSGUARD_LEGACY_CONNTRACK_MODULES_FILE}:${CONNTRACK_MODULES_FILE}"
     [ -n "$old" ] || continue
     [ -f "$old" ] || continue
     cp -p "$old" "$new"
+    migrate_relabel_marker "$new"
     rm -f "$old"
   done <<< "$pairs"
 
   if [ -f "$VPSGUARD_LEGACY_CONNTRACK_SYSCTL_FILE" ]; then
     cp -p "$VPSGUARD_LEGACY_CONNTRACK_SYSCTL_FILE" "$CONNTRACK_SYSCTL_FILE"
+    migrate_relabel_marker "$CONNTRACK_SYSCTL_FILE"
     if ! sysctl -q -p "$CONNTRACK_SYSCTL_FILE" >/dev/null 2>&1; then
       warn "Migration: could not apply the migrated conntrack sysctl file at runtime; it is still installed for next boot."
     fi
@@ -2782,6 +2842,7 @@ ${VPSGUARD_LEGACY_CONNTRACK_MODULES_FILE}:${CONNTRACK_MODULES_FILE}"
   if [ -f "$VPSGUARD_LEGACY_CONNTRACK_MODPROBE_FILE" ]; then
     target_hash="$(awk -F= '/hashsize=/{print $2; exit}' "$VPSGUARD_LEGACY_CONNTRACK_MODPROBE_FILE" 2>/dev/null)"
     cp -p "$VPSGUARD_LEGACY_CONNTRACK_MODPROBE_FILE" "$CONNTRACK_MODPROBE_FILE"
+    migrate_relabel_marker "$CONNTRACK_MODPROBE_FILE"
     rm -f "$VPSGUARD_LEGACY_CONNTRACK_MODPROBE_FILE"
     if [ -n "$target_hash" ] && [ -w "$(conntrack_hashsize_file)" ]; then
       printf '%s\n' "$target_hash" > "$(conntrack_hashsize_file)" 2>/dev/null || true
@@ -2791,6 +2852,7 @@ ${VPSGUARD_LEGACY_CONNTRACK_MODULES_FILE}:${CONNTRACK_MODULES_FILE}"
   if [ -f "$VPSGUARD_LEGACY_CONNTRACK_HELPER_FILE" ]; then
     cp -p "$VPSGUARD_LEGACY_CONNTRACK_HELPER_FILE" "$CONNTRACK_HELPER_FILE"
     chmod 755 "$CONNTRACK_HELPER_FILE"
+    migrate_relabel_marker "$CONNTRACK_HELPER_FILE"
     rm -f "$VPSGUARD_LEGACY_CONNTRACK_HELPER_FILE"
   fi
 }
