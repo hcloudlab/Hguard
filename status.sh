@@ -275,7 +275,7 @@ main() {
   local authorized_keys sudoers_file effective_sshd listeners available_cc current_cc current_qdisc key_owner ssh_dir_owner
   local password_state sudo_policy sudo_group_member="no" passwordless_effective="no"
   local ssh_socket_state ssh_service_state sshd_service_state ufw_state="inactive"
-  local client_address host_context effective_socket_listeners port_finalization
+  local client_address host_context effective_socket_listeners port_finalization os_info sshd_identifier
 
   if [ "$(id -u)" -ne 0 ]; then
     printf 'Please run status.sh as root so it can read protected Hguard state.\n' >&2
@@ -290,6 +290,8 @@ main() {
 
   section "Hguard"
   printf 'Version: %s\n' "$HGUARD_VERSION"
+  if ! os_info="$(read_os_release "${HGUARD_ETC_ROOT}/os-release" 2>/dev/null)"; then os_info="||unknown"; fi
+  printf 'OS: %s\n' "${os_info##*|}"
   printf 'Install status: %s\n' "${install_status:-not-configured}"
   printf 'Installed marker: %s\n' "$([ -f "$HGUARD_INSTALLED_MARKER" ] && printf present || printf missing)"
   printf 'Config: %s\n' "$HGUARD_CONFIG_FILE"
@@ -449,6 +451,12 @@ main() {
     printf 'sshd jail: active\n'
   else
     printf 'sshd jail: unavailable\n'
+  fi
+  sshd_identifier="$(sshd_log_identifier)"
+  if fail2ban_sshd_filter_matches "$sshd_identifier"; then
+    printf 'sshd filter: matches %s log lines\n' "$sshd_identifier"
+  else
+    printf 'sshd filter: does NOT match %s log lines (bans will not trigger)\n' "$sshd_identifier"
   fi
 
   section "BBR"

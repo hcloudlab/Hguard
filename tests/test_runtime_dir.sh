@@ -14,7 +14,7 @@ export HGUARD_STATE_DIR="$temporary_root/etc/hguard"
 . "$TEST_ROOT/install.sh"
 
 require_root() { :; }
-check_ubuntu_lts() { :; }
+check_supported_os() { :; }
 resolve_managed_user() { :; }
 resolve_sudo_mode() { SUDO_MODE=password; }
 resolve_ssh_ports() { :; }

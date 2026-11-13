@@ -12,9 +12,11 @@ apt_calls=()
 apt-get() {
   apt_calls+=("$*")
 }
+apt-cache() { return 0; }
 
+# update, first-run upgrade, required packages, optional tools.
 upgrade_system
-assert_equal 3 "${#apt_calls[@]}" "dependency installation command count"
+assert_equal 4 "${#apt_calls[@]}" "dependency installation command count"
 if ! printf '%s\n' "${apt_calls[2]}" | tr ' ' '\n' | grep -Fxq python3-systemd; then
   fail "fail2ban systemd backend dependency is not explicitly installed"
 fi

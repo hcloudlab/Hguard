@@ -1,6 +1,6 @@
 # Hguard v0.4.0
 
-Hguard 是面向 Ubuntu LTS 新 VPS 的 Bash 初始化与 SSH 安全加固工具。它创建或复用一个由用户明确指定的管理员账户，配置 SSH 公钥、sudo、UFW、fail2ban，并在内核支持时启用 Linux 原生 BBR。
+Hguard 是面向 Ubuntu LTS 与 Debian 稳定版新 VPS 的 Bash 初始化与 SSH 安全加固工具。它创建或复用一个由用户明确指定的管理员账户，配置 SSH 公钥、sudo、UFW、fail2ban，并在内核支持时启用 Linux 原生 BBR。
 
 Hguard 不安装第三方内核，不自动重启服务器，也不会在卸载时无条件关闭整套防火墙或 fail2ban。
 
@@ -25,13 +25,23 @@ Hguard 不安装第三方内核，不自动重启服务器，也不会在卸载�
 - 每次重跑检查真实状态并收敛，不再只根据 phase 标记跳过
 - 卸载只处理可识别的 Hguard 文件和记录过的规则
 
-## Ubuntu 状态
+## 系统支持
 
-| Ubuntu | 当前状态 | 说明 |
+| 系统 | 当前状态 | 说明 |
 | --- | --- | --- |
-| 22.04 LTS | 已完成真实 VPS 验证 | 覆盖传统 `ssh.service`、password/passwordless、22 → 2222 双阶段迁移、双向模式迁移、失败回滚、三次重跑、重启和安全部分卸载 |
-| 24.04 LTS | 已完成真实 VPS 验证 | 覆盖 `ssh.socket`、password/passwordless、双端口迁移、双向模式迁移、失败回滚、重跑、重启和安全部分卸载 |
-| 26.04 LTS | 不支持，安装前报错 | OpenSSH 10 改由 `sshd-session` 写日志，fail2ban 现有的 `_COMM=sshd` 过滤器可能失效；未做适配前 `check_ubuntu_lts` 会在改动前直接报错 |
+| Ubuntu 22.04 LTS | 已完成真实 VPS 验证 | 覆盖传统 `ssh.service`、password/passwordless、22 → 2222 双阶段迁移、双向模式迁移、失败回滚、三次重跑、重启和安全部分卸载 |
+| Ubuntu 24.04 LTS | 已完成真实 VPS 验证 | 覆盖 `ssh.socket`、password/passwordless、双端口迁移、双向模式迁移、失败回滚、重跑、重启和安全部分卸载 |
+| Debian 12 (bookworm) | 已适配，待真实 VPS 验证 | 默认 `ssh.service`；OpenSSH 9.2 仍以 `sshd[pid]` 写日志；fail2ban 1.0.2 |
+| Debian 13 (trixie) | 已适配，待真实 VPS 验证 | 默认 `ssh.service`；OpenSSH 10.0 改由 `sshd-session` 写日志，Debian 打包的 fail2ban 1.1.0 过滤器已兼容，Hguard 安装前会实测确认 |
+| Ubuntu 26.04 LTS | 不支持，安装前报错 | fail2ban 打包已兼容 `sshd-session`，但系统默认改用 sudo-rs 和 Rust coreutils，sudo/stat 行为尚未在真实 VPS 上验证 |
+| Ubuntu 20.04、Debian 11 及更早 | 不支持，安装前报错 | 已结束官方标准安全支持 |
+| 非 LTS Ubuntu、Debian testing/sid、其他发行版 | 不支持，安装前报错 | 支持周期短或无固定版本 |
+
+所有系统共用同一套流程；发行版差异只在三处处理：
+
+- 系统识别：`check_supported_os` 读取 `/etc/os-release`，不在支持列表中的系统在任何改动前退出；
+- 依赖安装：必需依赖（含 Debian 系 fail2ban 默认封禁动作所需的 `nftables`）安装失败即中止，`htop`、`jq`、`lsb-release` 等便利工具按当前软件源是否提供自动跳过；
+- fail2ban 过滤器实测：OpenSSH 9.8+ 改由 `sshd-session` 写认证日志，旧过滤器会让 jail 显示正常却从不封禁。Hguard 在修改 SSH 前、最终验收和 `hguard verify` 中都用 `fail2ban-regex` 对本机 OpenSSH 的真实日志格式做匹配测试，不匹配就拒绝继续。
 
 真实验证使用可随时重装并具有控制台回退能力的临时 VPS。不同云镜像仍可能包含额外 SSH、网络或软件源定制，首次使用时不要省略第二终端和云控制台门禁。
 
@@ -105,7 +115,7 @@ bash <(wget -qO- https://raw.githubusercontent.com/hcloudlab/Hguard/main/install
 
 ## sudo 权限模型
 
-两种模式都会把管理用户加入 Ubuntu 的 `sudo` 组。
+两种模式都会把管理用户加入发行版标准的 `sudo` 组（Ubuntu 与 Debian 相同）。
 
 ### 密码 sudo（默认、推荐）
 
@@ -476,7 +486,7 @@ bash tests/run.sh
 
 本地开发使用 **ShellCheck 0.11.0**。CI 下载并校验同一固定版本的官方二进制（见 `.github/workflows/shell-ci.yml`），不使用 `apt`/`apt-get` 安装的发行版自带版本 —— 22.04 自带 0.8.0、24.04 自带 0.9.0，两者都会对本仓库报告本地 0.11.0 下不存在的误报（0.8.0 的 SC2218、0.9.0 的 SC2317），版本不一致会导致 CI 和本地结果不一致。升级本地 ShellCheck 版本时，请同步升级 CI 固定的版本号和 SHA256。
 
-GitHub Actions 在 Ubuntu 22.04 和 24.04 runner 上执行同样的静态与隔离测试，不进行真实远程 SSH 联调。
+GitHub Actions 在 Ubuntu 22.04 和 24.04 runner 上执行静态与隔离测试，并在官方 Debian 12、13 容器中执行同样的隔离测试；不进行真实远程 SSH 联调。
 
 ### 发版步骤
 
