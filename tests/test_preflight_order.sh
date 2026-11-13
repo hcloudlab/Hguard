@@ -25,7 +25,7 @@ upgrade_marker="$temporary_root/upgrade-called"
 rm -f "$upgrade_marker"
 upgrade_system() { touch "$upgrade_marker"; }
 require_root() { :; }
-check_ubuntu_lts() { :; }
+check_supported_os() { :; }
 parse_args() { :; }
 resolve_managed_user() { NEW_USER="admin"; }
 resolve_sudo_mode() { SUDO_MODE="passwordless"; }

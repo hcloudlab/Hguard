@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Hguard v0.4.0
-# Ubuntu LTS initialization and SSH hardening with lockout-safe convergence.
+# Ubuntu LTS / Debian stable initialization and SSH hardening with lockout-safe convergence.
 
 HGUARD_VERSION="0.4.0"
 HGUARD_TEST_MODE="${HGUARD_TEST_MODE:-0}"
@@ -369,18 +369,64 @@ require_root() {
   fi
 }
 
-check_ubuntu_lts() {
-  local os_release="${HGUARD_ETC_ROOT}/os-release"
+# Single source of truth for which releases Hguard will modify. Everything
+# else is refused before any change is made.
+HGUARD_SUPPORTED_OS_TEXT="Ubuntu 22.04 / 24.04 LTS, Debian 12 (bookworm) / 13 (trixie)"
+HGUARD_OS_ID=""
+HGUARD_OS_VERSION_ID=""
+HGUARD_OS_PRETTY_NAME=""
 
-  [ -f "$os_release" ] || error "Cannot detect Ubuntu: ${os_release} is missing."
+# Prints "<ID>|<VERSION_ID>|<PRETTY_NAME>" from an os-release file. Sourced
+# in a subshell so os-release's variables never leak into Hguard's globals.
+read_os_release() {
+  local os_release="$1"
   # shellcheck disable=SC1090
-  . "$os_release"
-  [ "${ID:-}" = "ubuntu" ] || error "Unsupported OS: ${PRETTY_NAME:-unknown}. Ubuntu LTS is required."
-  case "${VERSION_ID:-}" in
-    22.04|24.04) ;;
-    *) error "该版本尚未经过测试: ${PRETTY_NAME:-unknown}. Supported: Ubuntu 22.04, 24.04." ;;
+  (. "$os_release" && printf '%s|%s|%s\n' "${ID:-}" "${VERSION_ID:-}" "${PRETTY_NAME:-unknown}")
+}
+
+# 0 = supported, 1 = known but refused (EOL / not validated), 2 = unknown.
+# Prints the refusal reason for 1/2.
+classify_os_support() {
+  local os_id="$1" version_id="$2"
+
+  case "${os_id}:${version_id}" in
+    ubuntu:22.04|ubuntu:24.04|debian:12|debian:13) return 0 ;;
+    ubuntu:20.04|ubuntu:18.04|debian:11|debian:10)
+      printf '该版本已结束官方安全支持，Hguard 不再适配，请重装为受支持的版本。\n'
+      return 1
+      ;;
+    ubuntu:26.04)
+      printf 'Ubuntu 26.04 默认改用 sudo-rs 和 Rust coreutils，Hguard 依赖的 sudo/stat 行为尚未在真实 VPS 上验证，暂不支持。\n'
+      return 1
+      ;;
+    ubuntu:*)
+      printf '只支持 Ubuntu LTS 版本；非 LTS 版本支持周期太短，不适配。\n'
+      return 1
+      ;;
+    debian:)
+      printf 'Debian testing/sid 没有固定版本号，不支持。\n'
+      return 1
+      ;;
   esac
-  info "Detected Ubuntu LTS: ${PRETTY_NAME:-unknown}"
+  printf '不是 Ubuntu 或 Debian 官方发行版。\n'
+  return 2
+}
+
+check_supported_os() {
+  local os_release="${HGUARD_ETC_ROOT}/os-release"
+  local parsed reason
+
+  [ -f "$os_release" ] || error "无法识别系统：${os_release} 不存在。"
+  parsed="$(read_os_release "$os_release")" || error "无法解析 ${os_release}。"
+  HGUARD_OS_ID="${parsed%%|*}"
+  parsed="${parsed#*|}"
+  HGUARD_OS_VERSION_ID="${parsed%%|*}"
+  HGUARD_OS_PRETTY_NAME="${parsed#*|}"
+
+  if ! reason="$(classify_os_support "$HGUARD_OS_ID" "$HGUARD_OS_VERSION_ID")"; then
+    error "不支持的系统: ${HGUARD_OS_PRETTY_NAME}。${reason} 支持列表: ${HGUARD_SUPPORTED_OS_TEXT}。"
+  fi
+  info "Detected supported OS: ${HGUARD_OS_PRETTY_NAME}"
 }
 
 validate_username() {
@@ -720,14 +766,52 @@ managed_package_version_snapshot() {
   done
 }
 
+# Packages the hardening flow itself depends on; a missing one is fatal.
+# nftables provides the `nft` binary used by the Debian-family fail2ban
+# default banaction (defaults-debian.conf: banaction = nftables), which
+# minimal Debian/VPS templates do not always ship; installing it does not
+# enable nftables.service. kmod/procps/adduser/passwd are present on stock
+# images but are listed so stripped provider templates converge too.
+HGUARD_REQUIRED_PACKAGES="sudo ufw fail2ban python3-systemd openssh-server iproute2 ca-certificates curl nftables kmod procps adduser passwd"
+# Convenience tools only: installed when the release offers them, never fatal.
+HGUARD_OPTIONAL_PACKAGES="wget git vim nano unzip htop jq gnupg lsb-release net-tools"
+
+apt_install() {
+  DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install -y "$@"
+}
+
+# The subset of the given package names that apt can currently install.
+available_packages() {
+  local package
+  for package in "$@"; do
+    if apt-cache show "$package" >/dev/null 2>&1; then
+      printf '%s\n' "$package"
+    fi
+  done
+}
+
 upgrade_system() {
-  info "Updating Ubuntu packages and installing Hguard dependencies..."
+  local -a optional_packages=()
+  local package
+
+  info "Updating ${HGUARD_OS_PRETTY_NAME:-system} packages and installing Hguard dependencies..."
   export NEEDRESTART_MODE=l
   apt-get update
   if [ ! -s "$HGUARD_INSTALLED_MARKER" ]; then
     DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y --with-new-pkgs
   fi
-  DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install -y sudo curl wget git vim nano unzip ufw fail2ban python3-systemd htop jq ca-certificates gnupg lsb-release net-tools iproute2 openssh-server
+  # shellcheck disable=SC2086
+  apt_install $HGUARD_REQUIRED_PACKAGES \
+    || error "Could not install required packages (${HGUARD_REQUIRED_PACKAGES}). No SSH changes were made."
+
+  # shellcheck disable=SC2086
+  while IFS= read -r package; do
+    [ -n "$package" ] && optional_packages+=("$package")
+  done <<< "$(available_packages $HGUARD_OPTIONAL_PACKAGES)"
+  if [ "${#optional_packages[@]}" -gt 0 ]; then
+    apt_install "${optional_packages[@]}" \
+      || warn "部分可选工具（${optional_packages[*]}）安装失败；不影响安全加固。"
+  fi
 }
 
 fail2ban_systemd_backend_available() {
@@ -741,7 +825,13 @@ ensure_managed_user() {
   else
     [ -t 0 ] || error "Creating a new administrator requires a trusted interactive terminal. Hguard does not accept sudo risk confirmation or passwords through automation variables."
     info "Creating administrator user ${NEW_USER}."
-    adduser --disabled-password --gecos "" "$NEW_USER"
+    # adduser 3.137+ (Ubuntu 24.04, Debian 13) deprecates --gecos in favour
+    # of --comment; Debian 12 / Ubuntu 22.04 only know --gecos.
+    if adduser --help 2>&1 | grep -Fq -- '--comment'; then
+      adduser --disabled-password --comment "" "$NEW_USER"
+    else
+      adduser --disabled-password --gecos "" "$NEW_USER"
+    fi
   fi
 
   usermod -aG sudo "$NEW_USER"
@@ -1778,6 +1868,46 @@ current_connection_ip() {
   printf '%s\n' "$ip"
 }
 
+# OpenSSH 9.8+ (Debian 13: 10.0) moved per-connection work into sshd-session,
+# so auth failures are logged as "sshd-session[pid]: ..." instead of
+# "sshd[pid]: ...". A fail2ban sshd filter that predates that change still
+# starts and reports a healthy jail but never bans anything. Debian/Ubuntu
+# packaging patched the filter (fail2ban 1.1.0-6+); this probe proves the
+# installed filter really matches what this OpenSSH writes, instead of
+# trusting version numbers.
+SSHD_SESSION_BINARIES="${SSHD_SESSION_BINARIES:-/usr/lib/openssh/sshd-session /usr/libexec/openssh/sshd-session /usr/libexec/sshd-session}"
+FAIL2BAN_PROBE_IP="192.0.2.10"
+
+sshd_log_identifier() {
+  local binary
+  for binary in $SSHD_SESSION_BINARIES; do
+    if [ -x "$binary" ]; then
+      printf 'sshd-session\n'
+      return 0
+    fi
+  done
+  printf 'sshd\n'
+}
+
+fail2ban_sshd_filter_matches() {
+  local identifier="$1"
+  local probe_line output
+
+  command -v fail2ban-regex >/dev/null 2>&1 || return 1
+  probe_line="2026-01-01 00:00:00 hguard-probe ${identifier}[4242]: Invalid user hguard-probe from ${FAIL2BAN_PROBE_IP} port 4242"
+  output="$(fail2ban-regex -o ip "$probe_line" sshd 2>/dev/null)" || return 1
+  printf '%s\n' "$output" | grep -Fxq "$FAIL2BAN_PROBE_IP"
+}
+
+verify_fail2ban_sshd_filter() {
+  local identifier
+  identifier="$(sshd_log_identifier)"
+  if ! fail2ban_sshd_filter_matches "$identifier"; then
+    warn "fail2ban 的 sshd 过滤器无法匹配本机 OpenSSH 的日志格式（${identifier}[pid]），jail 会显示正常但不会封禁任何 IP。"
+    return 1
+  fi
+}
+
 configure_fail2ban() {
   local content protected_ports ignoreip
   assert_managed_or_absent "$FAIL2BAN_JAIL"
@@ -1808,6 +1938,7 @@ ignoreip = ${ignoreip}
   atomic_write "$FAIL2BAN_JAIL" 644 "$content"
   local jail_changed="$ATOMIC_WRITE_CHANGED"
   fail2ban-client -t >/dev/null 2>&1 || error "The fail2ban configuration test failed."
+  verify_fail2ban_sshd_filter || error "The fail2ban sshd filter does not match this OpenSSH's log format; update fail2ban from the distribution repositories and rerun Hguard."
 
   local needs_restart="false"
   if [ "$jail_changed" = "true" ] || ! fail2ban-client status sshd >/dev/null 2>&1; then
@@ -2422,6 +2553,7 @@ run_acceptance_checks() {
     systemctl is-active --quiet fail2ban.service || { warn "Acceptance: fail2ban service is inactive."; failures=$((failures + 1)); }
   fi
   fail2ban-client status sshd >/dev/null 2>&1 || { warn "Acceptance: fail2ban sshd jail unavailable."; failures=$((failures + 1)); }
+  verify_fail2ban_sshd_filter || { warn "Acceptance: fail2ban sshd filter does not match this OpenSSH's log format."; failures=$((failures + 1)); }
 
   if ! current_cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"; then current_cc=""; fi
   if ! current_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null)"; then current_qdisc=""; fi
@@ -2611,7 +2743,7 @@ remove_legacy_phase_markers() {
 #
 # Trigger: a VPSGuard install exists (its state dir is present) and no
 # Hguard state dir exists yet. Runs once, early in main() - after
-# require_root/check_ubuntu_lts, before resolve_managed_user and anything
+# require_root/check_supported_os, before resolve_managed_user and anything
 # else that reads HGUARD_CONFIG_FILE - so the rest of main() finds a
 # config already in place and proceeds exactly like an ordinary rerun.
 #
@@ -3026,7 +3158,7 @@ This directory is left in place as a backup only and is no longer used by Hguard
 main() {
   parse_args "$@"
   require_root
-  check_ubuntu_lts
+  check_supported_os
   if [ "$OPTIMIZE_CONNTRACK" = "true" ]; then
     ensure_directory "$HGUARD_STATE_DIR" 700
     record_preinstall_state
@@ -3059,6 +3191,8 @@ main() {
   prepare_sshd_runtime_directory
   fail2ban_systemd_backend_available \
     || error "Fail2ban systemd backend dependency is unavailable after package installation. SSH hardening was not started."
+  verify_fail2ban_sshd_filter \
+    || error "The installed fail2ban sshd filter cannot match this OpenSSH's log format. SSH hardening was not started."
 
   ensure_managed_user
   configure_authorized_keys

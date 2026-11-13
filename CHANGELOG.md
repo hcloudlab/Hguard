@@ -2,6 +2,37 @@
 
 All notable changes to VPSGuard are documented here.
 
+## [Unreleased]
+
+### Added
+
+- Debian 12 (bookworm) and Debian 13 (trixie) support. OS detection is
+  now `check_supported_os` with a single support table; Ubuntu 20.04 /
+  Debian 11 and older (end of standard support), non-LTS Ubuntu, Debian
+  testing/sid and other distributions are refused before any change with
+  a specific reason.
+- fail2ban sshd filter probe: before SSH hardening, during final
+  acceptance and in `hguard verify`, `fail2ban-regex` must match an auth
+  failure logged the way this OpenSSH logs it (`sshd-session[pid]` on
+  OpenSSH 9.8+ such as Debian 13, `sshd[pid]` otherwise). A filter that
+  would leave the jail "active" but never ban now fails closed.
+- `hguard status` reports the detected OS and whether the sshd filter
+  matches the local log format.
+- CI runs the isolated test suite in official Debian 12 and 13 containers.
+
+### Changed
+
+- Dependency installation is split into required packages (now also
+  `nftables`, for the Debian-family fail2ban default banaction, plus
+  `kmod`, `procps`, `adduser`, `passwd`) whose failure aborts the install
+  explicitly, and convenience tools that are skipped when the release does
+  not provide them and never abort the install.
+- New administrators are created with `adduser --comment` where supported
+  (adduser 3.137+), falling back to `--gecos` on older releases.
+- Ubuntu 26.04 stays unsupported, now for the accurate reason: its
+  fail2ban packaging already handles `sshd-session`, but the default
+  sudo-rs and Rust coreutils are not yet validated on a real VPS.
+
 ## [0.4.0] - 2026-10-09
 
 ### Breaking Changes

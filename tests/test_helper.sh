@@ -36,6 +36,13 @@ export HGUARD_APT_HOOK_SCRIPT="${HGUARD_APT_HOOK_SCRIPT:-${HGUARD_LIB_DIR}/apt-h
 # silently replace (not chain with) a trap set here.
 unset _hguard_test_sandbox
 
+# Hermetic default for the fail2ban sshd filter probe: CI runners have no
+# fail2ban installed. Echo back the probe IP (what a matching filter prints
+# with `-o ip`). Exported so subprocess-based tests inherit it; a test that
+# exercises a mismatch redefines it.
+fail2ban-regex() { printf '192.0.2.10\n'; }
+export -f fail2ban-regex
+
 fail() {
   printf 'not ok - %s\n' "$1" >&2
   exit 1
